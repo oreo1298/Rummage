@@ -102,6 +102,16 @@ pub struct Writer {
     dir_inodes: HashMap<(VolumeId, u64, u64), EntryId>,
 }
 
+/// What an event’s directory is in the index.
+#[derive(Debug, Clone, Copy)]
+enum Resolved {
+    Dir(EntryId),
+    /// It no longer exists: the event is moot.
+    Gone,
+    /// It exists but the index doesn’t have it there yet: retry after this batch’s moves.
+    Pending,
+}
+
 /// What the filesystem says about one directory entry.
 enum ChildState {
     /// It exists: its metadata, mount id and real current path.
@@ -405,11 +415,23 @@ impl Writer {
             let Ok((root_meta, mnt_id, _)) = fossick_scan::stat_path(p.mount.mount_path()) else {
                 continue;
             };
-            let existing = self
-                .w
-                .volumes()
-                .iter()
-                .find(|v| v.key == ident.key)
+            let existing = match_volume(
+                self.w.volumes(),
+                &ident.key,
+                &p.mount.fstype,
+                &mount_path,
+                &seen,
+            );
+            if let Some(vid) = existing
+                && let Some(v) = self.w.volumes().get(vid.0 as usize)
+                && v.key != ident.key
+                && is_fallback(&v.key)
+            {
+                log::info(&format!("volume {} is now known as {}", v.key, ident.key));
+                self.w.set_volume_key(vid, &ident.key);
+            }
+            let existing = existing
+                .and_then(|vid| self.w.volumes().get(vid.0 as usize))
                 .map(|v| (v.id, v.online, v.mount_path.clone()));
             let (vid, kind) = match existing {
                 Some((vid, online, old_path)) => {
@@ -837,18 +859,20 @@ impl Writer {
     fn apply_event(&mut self, vid: VolumeId, ev: &FsEvent) -> bool {
         match ev {
             FsEvent::Child { dir, name } => match self.resolve(vid, dir) {
-                Some(d) => self.refresh_child(vid, d, name, handle_of(dir)),
-                None => {
+                Resolved::Dir(d) => self.refresh_child(vid, d, name, handle_of(dir)),
+                Resolved::Gone => true,
+                Resolved::Pending => {
                     log::debug(&format!(
-                        "unresolved directory for {}",
+                        "directory of {} not indexed yet",
                         String::from_utf8_lossy(name)
                     ));
-                    true
+                    false
                 }
             },
             FsEvent::Itself { dir } => match self.resolve(vid, dir) {
-                Some(d) => self.refresh_itself(vid, d, handle_of(dir)),
-                None => true,
+                Resolved::Dir(d) => self.refresh_itself(vid, d, handle_of(dir)),
+                Resolved::Gone => true,
+                Resolved::Pending => false,
             },
             FsEvent::Rename {
                 from_dir,
@@ -856,48 +880,78 @@ impl Writer {
                 to_dir,
                 to_name,
             } => {
-                let from = self
-                    .resolve(vid, from_dir)
-                    .map(|d| (d, handle_of(from_dir)));
-                let to = self.resolve(vid, to_dir).map(|d| (d, handle_of(to_dir)));
-                self.apply_rename(vid, from, from_name, to, to_name)
+                // `None` (wait) if a side’s directory isn’t indexed yet.
+                fn side(r: Resolved, d: &DirRef) -> Option<Option<(EntryId, Option<&FileHandle>)>> {
+                    match r {
+                        Resolved::Dir(id) => Some(Some((id, handle_of(d)))),
+                        Resolved::Gone => Some(None),
+                        Resolved::Pending => None,
+                    }
+                }
+                let from = self.resolve(vid, from_dir);
+                let to = self.resolve(vid, to_dir);
+                match (side(from, from_dir), side(to, to_dir)) {
+                    (Some(from), Some(to)) => self.apply_rename(vid, from, from_name, to, to_name),
+                    _ => false,
+                }
             }
         }
     }
 
     /// Finds the indexed directory an event refers to.
-    fn resolve(&mut self, vid: VolumeId, dir: &DirRef) -> Option<EntryId> {
+    fn resolve(&mut self, vid: VolumeId, dir: &DirRef) -> Resolved {
+        let is_dir = |w: &IndexWriter, id: EntryId, inode: u64| {
+            w.is_live(id)
+                && w.kind(id) == FileKind::Dir
+                && w.meta(id).is_some_and(|m| m.inode == inode)
+        };
         match dir {
             DirRef::Entry(id) => {
-                (self.w.is_live(*id) && self.w.kind(*id) == FileKind::Dir).then_some(*id)
+                if self.w.is_live(*id) && self.w.kind(*id) == FileKind::Dir {
+                    Resolved::Dir(*id)
+                } else {
+                    Resolved::Gone
+                }
             }
-            DirRef::Inode(dev, ino) => {
-                let id = *self.dir_inodes.get(&(vid, *dev, *ino))?;
-                (self.w.is_live(id)
-                    && self.w.kind(id) == FileKind::Dir
-                    && self.w.meta(id).is_some_and(|m| m.inode == *ino))
-                .then_some(id)
-            }
+            // inotify: a watched directory whose listing was never applied, or that was
+            // removed from the index, is gone (or replaced, which its parent’s events cover).
+            DirRef::Inode(dev, ino) => match self.dir_inodes.get(&(vid, *dev, *ino)) {
+                Some(&id) if is_dir(&self.w, id, *ino) => Resolved::Dir(id),
+                other => {
+                    log::debug(&format!(
+                        "event for unindexed directory {dev}:{ino} (mapped: {})",
+                        other.is_some()
+                    ));
+                    Resolved::Gone
+                }
+            },
             DirRef::Handle(h) => {
                 let key = (vid, h.clone());
                 if let Some(&(id, inode)) = self.handles.get(&key) {
-                    if self.w.is_live(id)
-                        && self.w.kind(id) == FileKind::Dir
-                        && self.w.meta(id).is_some_and(|m| m.inode == inode)
-                    {
-                        return Some(id);
+                    if is_dir(&self.w, id, inode) {
+                        return Resolved::Dir(id);
                     }
                     self.handles.remove(&key);
                 }
                 // Not seen during a scan: open the handle and look its path up.
-                let fd = self.open_dir_handle(vid, h).ok()?;
-                let id = self.w.lookup_path(&fd_path(&fd)?)?;
-                if self.w.kind(id) != FileKind::Dir {
-                    return None;
+                let fd = match self.open_dir_handle(vid, h) {
+                    Ok(fd) => fd,
+                    // The directory no longer exists.
+                    Err(e) if matches!(e.raw_os_error(), Some(libc::ESTALE | libc::ENOENT)) => {
+                        return Resolved::Gone;
+                    }
+                    Err(_) => return Resolved::Pending,
+                };
+                let inode = rustix::fs::fstat(&fd).map_or(0, |st| st.st_ino);
+                // It exists, so if the index doesn’t have it where it is (a move or a creation
+                // not applied yet), its events must wait rather than be dropped.
+                match fd_path(&fd).and_then(|p| self.w.lookup_path(&p)) {
+                    Some(id) if is_dir(&self.w, id, inode) => {
+                        self.handles.insert(key, (id, inode));
+                        Resolved::Dir(id)
+                    }
+                    _ => Resolved::Pending,
                 }
-                let inode = self.w.meta(id).map_or(0, |m| m.inode);
-                self.handles.insert(key, (id, inode));
-                Some(id)
             }
         }
     }
@@ -1284,6 +1338,38 @@ fn stop_watch(w: &Watch) {
     }
 }
 
+/// True for identity keys that only name a mount point (no filesystem UUID was found).
+fn is_fallback(key: &str) -> bool {
+    key.starts_with("path:")
+}
+
+/// The indexed volume a mount is: the one with the same identity key or, when one of the two
+/// keys is only a fallback, the one of the same type at the same mount point. udev may not
+/// have published a new disk’s UUID yet when the daemon first sees it (or may on one start and
+/// not the next); without this the same filesystem would be indexed twice. Volumes already
+/// matched to another mount (`taken`) are skipped.
+fn match_volume(
+    volumes: &[fossick_core::Volume],
+    key: &str,
+    fstype: &str,
+    mount_path: &[u8],
+    taken: &HashSet<VolumeId>,
+) -> Option<VolumeId> {
+    let free = |v: &&fossick_core::Volume| !taken.contains(&v.id);
+    volumes
+        .iter()
+        .filter(free)
+        .find(|v| v.key == key)
+        .or_else(|| {
+            volumes.iter().filter(free).find(|v| {
+                (is_fallback(key) || is_fallback(&v.key))
+                    && v.fstype == fstype
+                    && v.mount_path == mount_path
+            })
+        })
+        .map(|v| v.id)
+}
+
 /// True if directory timestamps on this filesystem reliably change with the directory’s
 /// contents, so pruned rescans may skip directories whose times didn’t change.
 fn prunable(fstype: &str) -> bool {
@@ -1326,4 +1412,60 @@ fn user_plan(mounts: &[crate::mounts::MountInfo]) -> Vec<Planned> {
 
 fn bytes_path(b: &[u8]) -> PathBuf {
     PathBuf::from(OsStr::from_bytes(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vol(id: u16, key: &str, fstype: &str, path: &[u8]) -> fossick_core::Volume {
+        fossick_core::Volume {
+            id: VolumeId(id),
+            key: key.into(),
+            mount_path: path.to_vec(),
+            fstype: fstype.into(),
+            label: None,
+            root: EntryId(0),
+            online: false,
+        }
+    }
+
+    #[test]
+    fn fallback_identities_match_the_same_mount() {
+        let vols = [
+            vol(0, "path:ext4:/mnt/a", "ext4", b"/mnt/a"),
+            vol(1, "uuid:1111", "ext4", b"/mnt/b"),
+            vol(2, "uuid:2222", "xfs", b"/mnt/c"),
+        ];
+        let none = HashSet::new();
+        // The UUID showed up after the first start.
+        assert_eq!(
+            match_volume(&vols, "uuid:9999", "ext4", b"/mnt/a", &none),
+            Some(VolumeId(0))
+        );
+        // The UUID is missing this time.
+        assert_eq!(
+            match_volume(&vols, "path:ext4:/mnt/b", "ext4", b"/mnt/b", &none),
+            Some(VolumeId(1))
+        );
+        // Two real UUIDs never match each other, and the type must agree.
+        assert_eq!(
+            match_volume(&vols, "uuid:3333", "ext4", b"/mnt/b", &none),
+            None
+        );
+        assert_eq!(
+            match_volume(&vols, "path:ext4:/mnt/c", "ext4", b"/mnt/c", &none),
+            None
+        );
+        // An exact key wins, and a volume is matched to one mount only.
+        assert_eq!(
+            match_volume(&vols, "uuid:2222", "xfs", b"/elsewhere", &none),
+            Some(VolumeId(2))
+        );
+        let taken: HashSet<VolumeId> = [VolumeId(0)].into();
+        assert_eq!(
+            match_volume(&vols, "uuid:9999", "ext4", b"/mnt/a", &taken),
+            None
+        );
+    }
 }

@@ -56,8 +56,14 @@ compare() {
     local first
     first=$(diff <(echo "$expected") <(echo "$got") | grep -a -m1 '^[<>]' | cut -d' ' -f4- || true)
     if [ -n "$first" ] && grep -q 'fossickd: debug:' "$WORK/daemon.log"; then
-      echo "--- debug lines naming $(basename "$first"):" >&2
-      grep -aF -- "$(basename "$first")" "$WORK/daemon.log" | tail -30 >&2 || true
+      # Its last two components: specific enough, and still valid if an ancestor moved.
+      local tail2
+      tail2="$(basename "$(dirname "$first")")/$(basename "$first")"
+      echo "--- debug lines naming $tail2 (and its directory):" >&2
+      grep -aF -e "$tail2" -e "/$(basename "$(dirname "$first")") " "$WORK/daemon.log" \
+        | tail -40 >&2 || true
+      grep -a 'unindexed directory\|not indexed yet\|not applying\|ambiguous' "$WORK/daemon.log" \
+        | tail -10 >&2 || true
     fi
     "$FOSSICK" --socket "$SOCK" --status >&2 || true
     die "$label: index differs from the filesystem (< disk, > index)"

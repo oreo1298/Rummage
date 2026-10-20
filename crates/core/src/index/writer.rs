@@ -615,6 +615,14 @@ impl IndexWriter {
         self.batch.touched.insert(NONE);
     }
 
+    /// Changes a volume’s identity key (when a stronger identity becomes known for it).
+    pub fn set_volume_key(&mut self, volume: VolumeId, key: &str) {
+        if let Some(v) = Arc::make_mut(&mut self.data.volumes).get_mut(volume.0 as usize) {
+            key.clone_into(&mut v.key);
+        }
+        self.batch.touched.insert(NONE);
+    }
+
     // ----- mutations -----
 
     fn alloc_slot(&mut self, vol: VolumeId) -> Result<u32, IndexError> {
