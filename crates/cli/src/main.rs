@@ -4,6 +4,7 @@
 //! on demand). `--local DIR` and `--load SNAPSHOT` search in-process without a daemon.
 
 mod daemon;
+mod gui;
 mod output;
 mod users;
 
@@ -31,6 +32,7 @@ mod exit {
     pub const NO_DAEMON: u8 = 3;
     pub const QUERY_ERROR: u8 = 4;
     pub const IO_ERROR: u8 = 5;
+    pub const NO_GUI: u8 = 6;
 }
 
 #[derive(Parser, Debug)]
@@ -39,12 +41,15 @@ mod exit {
     version,
     about = "Instant file name search (Everything syntax)",
     after_help = "EXIT STATUS: 0 = results found, 1 = no results, 2 = usage error, \
-                  3 = daemon unavailable, 4 = invalid query, 5 = I/O error.\n\n\
+                  3 = daemon unavailable, 4 = invalid query, 5 = I/O error, \
+                  6 = no GUI installed.\n\n\
                   Examples:\n  fossick 'ext:pdf dm:thisyear'\n  \
                   fossick -n 20 --sort size --desc 'size:>100mb'\n  \
                   fossick -0 '*.rs' | xargs -0 wc -l\n  \
                   fossick --local ~/src 'TODO content:FIXME'\n  \
-                  fossick --status"
+                  fossick --status\n  \
+                  fossick --gui invoice      (open the search window)\n  \
+                  fossick --toggle           (bind this to a key: show or hide the window)"
 )]
 struct Cli {
     /// Search query (Everything syntax). Multiple arguments are joined with spaces.
@@ -129,6 +134,12 @@ struct Cli {
     /// Ask the daemon to rescan a volume by mount point ("" = all; root only).
     #[arg(long, value_name = "MOUNT", conflicts_with_all = ["local", "load"])]
     rescan: Option<PathBuf>,
+    /// Open the search window (with the query, if any), or bring the running one forward.
+    #[arg(long, conflicts_with_all = ["local", "load", "status", "rescan", "toggle"])]
+    gui: bool,
+    /// Show the search window, or hide it if it is in front (for a global shortcut).
+    #[arg(long, conflicts_with_all = ["local", "load", "status", "rescan"])]
+    toggle: bool,
 }
 
 fn main() -> ExitCode {
@@ -219,6 +230,9 @@ fn macros_of(cli: &Cli) -> Result<Vec<(String, String)>, Failure> {
 }
 
 fn run(cli: &Cli) -> Result<u8, Failure> {
+    if cli.gui || cli.toggle {
+        return gui::run(&cli.query.join(" "), cli.toggle);
+    }
     let field = SortField::parse(&cli.sort)
         .ok_or_else(|| (2, format!("unknown sort field {:?}", cli.sort)))?;
     let sort = Sort {

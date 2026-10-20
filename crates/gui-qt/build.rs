@@ -11,7 +11,7 @@ fn main() {
     .into_iter()
     .map(QmlFile::from)
     .chain(
-        ["qml/Filters.qml", "qml/Columns.qml"]
+        ["qml/Filters.qml", "qml/Columns.qml", "qml/Windows.qml"]
             .into_iter()
             .map(|f| QmlFile::from(f).singleton(true)),
     );

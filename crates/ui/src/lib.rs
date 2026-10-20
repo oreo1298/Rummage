@@ -5,6 +5,7 @@
 pub mod columns;
 pub mod desktop;
 pub mod filters;
+pub mod instance;
 pub mod launcher;
 pub mod rows;
 pub mod selection;

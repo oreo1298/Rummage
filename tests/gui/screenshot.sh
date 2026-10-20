@@ -25,3 +25,15 @@ export FOSSICK_SOCKET="$XDG_RUNTIME_DIR/fossick/socket"
 echo "saved $OUT/empty-query.png"
 "$BIN/fossick-qt" --search report --screenshot "$OUT/query.png" 2500
 echo "saved $OUT/query.png"
+
+# Single instance: a second launch passes its search to the running window (new tab).
+if command -v dbus-run-session > /dev/null; then
+  dbus-run-session -- bash -c '
+    FOSSICK_SINGLE_INSTANCE=1 "$0/fossick-qt" --screenshot "$1/second-instance.png" 4000 &
+    first=$!
+    sleep 1.5
+    timeout 10 "$0/fossick" --gui holiday || { echo "FAIL: fossick --gui did not hand over"; exit 1; }
+    wait $first
+  ' "$BIN" "$OUT"
+  echo "saved $OUT/second-instance.png"
+fi

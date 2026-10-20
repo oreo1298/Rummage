@@ -945,6 +945,7 @@ dependencies = [
  "fossick-core",
  "fossick-proto",
  "fossick-scan",
+ "fossick-ui",
  "jiff",
  "nix",
  "serde",

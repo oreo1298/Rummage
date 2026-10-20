@@ -17,6 +17,7 @@ fossick-core.workspace = true
 fossick-scan.workspace = true
 fossick-proto.workspace = true
 fossick-client.workspace = true
+fossick-ui.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

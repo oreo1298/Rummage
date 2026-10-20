@@ -8,6 +8,8 @@ import io.github.oreo1298.Fossick
 Kirigami.ApplicationWindow {
     id: root
 
+    // Text for the first tab (new windows from a search command).
+    property string initialText: ""
     // Settings are shared by all windows through App; changes are saved right away.
     property var settings: JSON.parse(App.settingsJson)
     readonly property var current: tabs.itemAt(tabBar.currentIndex)
@@ -29,9 +31,7 @@ Kirigami.ApplicationWindow {
         tabModel.remove(index)
     }
     function newWindow() {
-        const c = Qt.createComponent(Qt.resolvedUrl("Main.qml"))
-        const w = c.createObject(null)
-        if (w) w.show()
+        Windows.create("")
     }
     function openMainMenu(item) {
         mainMenu.popup(item, 0, item.height)
@@ -88,7 +88,9 @@ Kirigami.ApplicationWindow {
                     id: tabs
                     model: ListModel {
                         id: tabModel
-                        Component.onCompleted: append({ initial: App.initialSearch })
+                        Component.onCompleted: append({
+                            initial: root.initialText !== "" ? root.initialText : Windows.takeInitialSearch()
+                        })
                     }
                     delegate: SearchView {
                         required property string initial
@@ -153,10 +155,20 @@ Kirigami.ApplicationWindow {
         onActivated: tabBar.currentIndex = (tabBar.currentIndex + tabModel.count - 1) % tabModel.count
     }
 
-    onClosing: {
+    Component.onCompleted: Windows.add(root)
+    onActiveChanged: if (active) Windows.focused(root)
+
+    onClosing: close => {
         settings.window_width = width
         settings.window_height = height
         if (current) current.storeColumns()
         saveSettings()
+        // With the tray icon, closing the last window can just hide it.
+        if (Windows.trayShown && settings.close_to_tray && Windows.list.length === 1) {
+            close.accepted = false
+            root.hide()
+            return
+        }
+        Windows.remove(root)
     }
 }

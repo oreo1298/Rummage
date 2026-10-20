@@ -67,7 +67,7 @@ jobs:
         with:
           key: gui-qt
       - run: cargo clippy -p fossick-qt --all-targets -- -D warnings
-      - run: cargo build -p fossick-qt -p fossickd
+      - run: cargo build -p fossick-qt -p fossickd -p fossick
       - name: Offscreen screenshots
         env:
           QT_QPA_PLATFORM: offscreen

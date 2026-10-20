@@ -17,5 +17,7 @@ pub mod ffi {
         fn mime_comment(file_name: &QString, is_dir: bool) -> QString;
         fn install_translations();
         fn schedule_screenshot(path: &QString, delay_ms: i32);
+        fn set_activation_token(token: &QString);
+        fn set_quit_on_last_window_closed(quit: bool);
     }
 }

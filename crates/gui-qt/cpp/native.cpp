@@ -107,6 +107,16 @@ void install_translations() {
     }
 }
 
+void set_activation_token(const QString& token) {
+    if (!token.isEmpty()) {
+        qputenv("XDG_ACTIVATION_TOKEN", token.toUtf8());
+    }
+}
+
+void set_quit_on_last_window_closed(bool quit) {
+    QGuiApplication::setQuitOnLastWindowClosed(quit);
+}
+
 void schedule_screenshot(const QString& path, int delay_ms) {
     QTimer::singleShot(delay_ms, [path]() {
         int code = 1;

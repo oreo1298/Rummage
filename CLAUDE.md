@@ -22,7 +22,7 @@ sudo tests/integration/multiuser.sh                       # FSTYPE=…, WATCH=�
 sudo tests/integration/systemd.sh                         # needs systemd as PID 1 (CI)
 # Qt GUI (needs Qt ≥ 6.8 + KF6 Kirigami, e.g. Ubuntu 26.04 / Debian 13 / Arch; CI job gui-qt):
 cargo clippy -p fossick-qt --all-targets -- -D warnings
-cargo build -p fossick-qt -p fossickd
+cargo build -p fossick-qt -p fossickd -p fossick
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software XDG_CURRENT_DESKTOP=KDE \
   tests/gui/screenshot.sh shots target/debug              # screenshots against a user daemon
 ```

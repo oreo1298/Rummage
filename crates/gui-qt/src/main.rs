@@ -9,6 +9,7 @@ mod search;
 mod status;
 
 use cxx_qt_lib::{QQmlApplicationEngine, QString, QUrl};
+use fossick_ui::instance::{self, Claim, Command};
 use fossick_ui::settings::Settings;
 
 /// The value after `flag` on the command line.
@@ -19,10 +20,44 @@ pub fn arg_value(flag: &str) -> Option<String> {
 }
 
 fn main() {
-    if std::env::args().any(|a| a == "--version" || a == "-V") {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("fossick-qt {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "Usage: fossick-qt [--search TEXT] [--new-window] [--toggle]\n\n\
+             Opens the Fossick search window, or passes the request to the one already running."
+        );
+        return;
+    }
+    let token = Command::token_from_env();
+    let first = if let Some(text) = arg_value("--search") {
+        Command::Search { text, token }
+    } else if args.iter().any(|a| a == "--new-window") {
+        Command::NewWindow { token }
+    } else if args.iter().any(|a| a == "--toggle") {
+        Command::Toggle { token }
+    } else {
+        Command::Activate { token }
+    };
+    // One GUI per session: forward the request if one runs. Tests (--screenshot) and sessions
+    // without D-Bus run on their own (FOSSICK_SINGLE_INSTANCE=1 makes tests claim the name).
+    let standalone = args.iter().any(|a| a == "--screenshot")
+        && std::env::var_os("FOSSICK_SINGLE_INSTANCE").is_none();
+    let _instance = if standalone {
+        None
+    } else {
+        match instance::claim(&first, app::deliver) {
+            Ok(Claim::Primary(i)) => Some(i),
+            Ok(Claim::Forwarded) => return,
+            Err(e) => {
+                eprintln!("fossick-qt: running without single-instance support: {e}");
+                None
+            }
+        }
+    };
     native::ffi::create_application(
         &QString::from("fossick"),
         &QString::from("io.github.oreo1298.Fossick"),
@@ -32,7 +67,6 @@ fn main() {
     native::ffi::install_translations();
     native::ffi::set_color_scheme(app::theme_code(Settings::load().theme));
     // For tests: `--screenshot FILE [DELAY_MS]` saves the window to FILE and exits.
-    let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--screenshot") {
         let path = args
             .get(i + 1)
