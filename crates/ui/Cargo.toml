@@ -1,0 +1,27 @@
+[package]
+name = "fossick-ui"
+description = "Frontend logic shared by the Fossick GUIs: daemon session, row cache, columns, settings, desktop actions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+fossick-client.workspace = true
+fossick-proto.workspace = true
+jiff.workspace = true
+nix = { workspace = true, features = ["user"] }
+rustix.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+trash = "5.2"
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

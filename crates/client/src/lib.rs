@@ -263,6 +263,25 @@ impl Client {
         Ok(read_message(&mut self.reader)?)
     }
 
+    /// True if a message (a push) can be read now, waiting up to `timeout` for one to arrive.
+    /// Lets a frontend thread interleave its own requests with live updates.
+    pub fn poll_readable(&mut self, timeout: Duration) -> Result<bool, ClientError> {
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+        if !self.pushed.is_empty() || !self.reader.buffer().is_empty() {
+            return Ok(true);
+        }
+        let ts = Timespec {
+            tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(timeout.subsec_nanos()),
+        };
+        let mut fds = [PollFd::new(self.reader.get_ref(), PollFlags::IN)];
+        match poll(&mut fds, Some(&ts)) {
+            Ok(n) => Ok(n > 0),
+            Err(rustix::io::Errno::INTR) => Ok(false),
+            Err(e) => Err(ClientError::Proto(ProtoError::Io(e.into()))),
+        }
+    }
+
     /// Pushes received so far.
     pub fn take_pushes(&mut self) -> Vec<Response> {
         std::mem::take(&mut self.pushed)

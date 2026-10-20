@@ -17,20 +17,28 @@ the privileged CI job, or runs on real hardware. A filesystem that hasn’t been
   `content:` must only read files the user can read; folder sizes and child counts of subtrees
   the user can’t list stay hidden.
 
+Numbers are “storm took X s; index caught up Y s later” for the first live storm, then the
+entries compared after the restart and after the second storm. CI runs on GitHub’s
+`ubuntu-latest` runners (kernels 6.17 and 7.0, Azure builds), run 18 (commit `4269d58`).
+
 | Filesystem | Scan | Real-time method (default) | Fallback tested | Tested where | Result |
 |---|---|---|---|---|---|
-| ext4 | getdents64 + statx | fanotify (FID, `FAN_RENAME`) | inotify, polling | dev VM, kernel 6.18 | storm ✅ (fanotify 10k ops, inotify 8k, polling 3k), multi-user ✅ (fanotify, inotify) |
-| xfs | getdents64 + statx | fanotify (FID, `FAN_RENAME`) | inotify | dev VM, kernel 6.18 | storm ✅ (fanotify 10k, inotify 8k), multi-user ✅ |
-| btrfs | | | | CI job `integration` | untested yet |
-| f2fs | | | | CI job `integration` | untested yet |
-| vfat | | | | CI job `integration` | untested yet |
-| exfat | | | | CI job `integration` | untested yet |
-| ntfs3 | | | | CI job `integration` | untested yet |
-| tmpfs | getdents64 + statx | (opt-in) | | systemd CI test | untested yet |
+| ext4 | getdents64 + statx | fanotify (FID, `FAN_RENAME`) | inotify, polling | dev VM (6.18), CI (6.17) | storm ✅ fanotify (8k ops: 8.4 s, caught up 0.81 s; 33,028 / 33,200 entries), inotify ✅ (5k: 4.9 s, 0.84 s), polling ✅ (dev VM); multi-user ✅ |
+| xfs | getdents64 + statx | fanotify (FID, `FAN_RENAME`) | inotify | dev VM (6.18), CI (7.0) | storm ✅ fanotify (11.6 s, 1.53 s; 84,468 / 135,545), inotify ✅ (6.0 s, 1.55 s); multi-user ✅ |
+| btrfs | getdents64 + statx (nested subvolumes followed) | fanotify (FID, `FAN_RENAME`) | inotify | CI (6.17) | storm ✅ fanotify (13.9 s, 1.50 s; 88,184 / 136,207); inotify ⚠️ passes in most runs, but runs 17 and 18 each lost one or a few files created right after a new directory appeared (under investigation, `docs/TODO.md`); multi-user ✅ (run 15) |
+| f2fs | getdents64 + statx | fanotify (FID, `FAN_RENAME`) | inotify | CI (6.17) | storm ✅ fanotify (8.7 s, 1.98 s; 84,803 / 112,769), inotify ✅ (3.8 s, 1.09 s); multi-user ✅ |
+| vfat | getdents64 + statx (always full rescans) | fanotify (FID) | inotify | CI (7.0) | storm ✅ fanotify (59 s of writing, caught up 2.5 s; 118,107 / 164,600), inotify ✅ (16.7 s, 1.48 s); multi-user n/a (no Unix permissions) |
+| exfat | getdents64 + statx (always full rescans) | **inotify** (no file handles, so no fanotify) | — | CI (7.0) | storm ✅ inotify (107 s of writing, caught up 4.0 s; 113,909 / 155,827); multi-user n/a |
+| ntfs3 | getdents64 + statx | fanotify (FID) | inotify | CI (7.0) | storm ✅ fanotify (16.0 s, 2.25 s; 115,333 / 157,903), inotify ✅ (7.3 s, 1.40 s); multi-user n/a (mounted without permission mapping) |
+| tmpfs | getdents64 + statx | fanotify (opt-in: `index_tmpfs`) | | CI systemd test (hardened service) | indexed and watched ✅, per-user filtering ✅ |
+| ext4 hot-plugged after the service started | getdents64 + statx | fanotify | | CI systemd test | picked up and watched inside the service’s mount namespace ✅ |
 | nfs, cifs, sshfs | | polling (opt-in) | | | untested |
 | iso9660, udf, squashfs, erofs | getdents64 + statx | static | | dev VM (squashfs mounts of the sandbox) | indexed once ✅ |
 
-Rows marked “CI job” are filled from the GitHub Actions results of the `integration` job.
+The slow vfat/exfat storms are the writing itself (FAT directories are linear lists); the
+daemon’s full rescans of those volumes after a restart took 1.95 s and 3.05 s for ~115k entries.
+
+CI rows come from the GitHub Actions `integration` (loop-device storms) and `systemd` jobs.
 
 ## Behaviour worth knowing
 

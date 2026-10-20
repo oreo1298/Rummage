@@ -56,8 +56,11 @@ feature is not listed here and not marked ✅ in `docs/ARCHITECTURE.md`, treat i
 - [ ] **Scanner threads per device type** (`queue/rotational`).
 - [ ] **`rc:` / recent changes**: needs a change log in the daemon.
 - [ ] **Polkit** for admin requests (rescan) from non-root users; today only root may rescan.
-- [ ] **Filesystem matrix beyond ext4/xfs:** btrfs, f2fs, vfat, exfat and ntfs3 run in the CI job;
-  results go into `docs/FILESYSTEMS.md`.
+- [ ] **btrfs + inotify:** CI runs 17 and 18 each lost one or a few files created right after a
+  new directory appeared (every other filesystem and watcher passes; fanotify on btrfs passes).
+  The storm test now logs exact-path traces on failure to find out why.
+- [ ] **UUIDs without udev:** `FS_IOC_GETFSUUID` (Linux 6.5+) could identify volumes before udev
+  publishes `/dev/disk/by-uuid`; until then the fallback identity is matched by mount point.
 - [ ] **Network filesystems** (polling) have no automated test yet.
 - [ ] **OpenRC and runit services** (Phase 4, with packaging).
 - [ ] **Event-storm benchmarks with the daemon** (`fossick-bench-report storm` measures the core

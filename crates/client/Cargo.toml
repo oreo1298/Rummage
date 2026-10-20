@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 fossick-proto.workspace = true
+rustix = { workspace = true, features = ["event"] }
 thiserror.workspace = true
 
 [lints]
