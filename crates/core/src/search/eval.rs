@@ -343,6 +343,31 @@ impl<'a> Engine<'a> {
                     set.is_some_and(|s| self.d.parent_of(id).is_some_and(|par| s.contains(&par)))
                 })
             }
+            // The commonest metadata leaves get their own loops: going through `leaf` costs a
+            // call and a large match per entry.
+            Pred::Kind(k) => {
+                let d = self.d;
+                match k {
+                    KindOnly::Files => self.filter(page, cand, |id| !d.is_dir(id)),
+                    KindOnly::Folders => self.filter(page, cand, |id| d.is_dir(id)),
+                    KindOnly::Any => *cand,
+                }
+            }
+            Pred::Size(r) => {
+                let d = self.d;
+                let hide = self.ctx.hide_restricted_sizes;
+                self.filter(page, cand, |id| {
+                    r.contains(i128::from(d.size_of(id)))
+                        && !(hide && super::size_hidden(self.g, self.ctx, EntryId(id)))
+                })
+            }
+            Pred::Time(field, r) => {
+                let d = self.d;
+                self.filter(page, cand, |id| {
+                    d.time_secs(id, *field)
+                        .is_some_and(|t| r.contains(i128::from(t)))
+                })
+            }
             Pred::Ext { .. } if self.exts.contains_key(&key(p)) => {
                 self.eval_ext(p, &self.exts[&key(p)], page, cand)
             }
@@ -772,8 +797,9 @@ impl<'a> Engine<'a> {
                 }
             }
             Pred::Size(r) => {
-                !super::size_hidden(self.g, self.ctx, EntryId(id))
-                    && r.contains(i128::from(d.size_of(id)))
+                r.contains(i128::from(d.size_of(id)))
+                    && !(self.ctx.hide_restricted_sizes
+                        && super::size_hidden(self.g, self.ctx, EntryId(id)))
             }
             Pred::Time(field, r) => d
                 .time_secs(id, *field)

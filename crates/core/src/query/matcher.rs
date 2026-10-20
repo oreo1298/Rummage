@@ -129,8 +129,9 @@ pub struct TextMatch {
     /// ASCII case-insensitive searcher for raw arenas (case-insensitive ASCII needles only).
     ci: Option<aho_corasick::AhoCorasick>,
     /// For regexes: the same pattern with `^`/`$` matching at NUL, for scanning a whole name
-    /// arena at once. `None` when the pattern has anchors that would behave differently there.
-    arena_re: Option<Regex>,
+    /// arena at once (`None` inside when the pattern has anchors that would behave differently
+    /// there). Built on first use: many compiled queries never scan a dense page.
+    arena_re: std::sync::OnceLock<Option<Regex>>,
 }
 
 /// Translates Everything wildcards (`*`, `?`) into a regex pattern.
@@ -223,7 +224,7 @@ impl TextMatch {
             needle_ascii,
             finder,
             ci,
-            arena_re: None,
+            arena_re: std::sync::OnceLock::new(),
         }
     }
 
@@ -248,13 +249,17 @@ impl TextMatch {
         let mut m = Self::literal("", TextMode::Substring, case, diacritics, false);
         m.mode = TextMode::Regex(re);
         m.raw = pattern.to_owned();
-        m.arena_re = arena_regex(pattern, case);
         Ok(m)
     }
 
     /// The arena variant of a regex (see `arena_re`).
     pub(crate) fn arena_regex(&self) -> Option<&Regex> {
-        self.arena_re.as_ref()
+        if !self.is_regex() {
+            return None;
+        }
+        self.arena_re
+            .get_or_init(|| arena_regex(&self.raw, self.case))
+            .as_ref()
     }
 
     #[must_use]
@@ -602,7 +607,7 @@ mod tests {
 
     #[test]
     fn arena_regexes() {
-        let has_arena = |p: &str| TextMatch::regex(p, false, true).unwrap().arena_re.is_some();
+        let has_arena = |p: &str| TextMatch::regex(p, false, true).unwrap().arena_regex().is_some();
         assert!(has_arena("^data_[0-9]+$"));
         assert!(has_arena(r"\bfoo\b"));
         assert!(!has_arena(r"\Adata"));
@@ -610,7 +615,7 @@ mod tests {
         assert!(!has_arena("(?-m)^data"));
         assert!(!has_arena("(?m)^data"));
         let m = TextMatch::regex("^b.*c$", false, true).unwrap();
-        let re = m.arena_re.unwrap();
+        let re = m.arena_regex().unwrap().clone();
         let arena = b"abc\0bxc\0b\0c\0";
         let hits: Vec<usize> = re.find_iter(arena).map(|x| x.start()).collect();
         assert_eq!(hits, vec![4]);
