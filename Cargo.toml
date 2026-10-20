@@ -29,6 +29,7 @@ jiff = "0.2"
 libc = "0.2"
 memchr = "2.7"
 memmap2 = "0.9"
+nix = { version = "0.31", default-features = false, features = ["user", "fs"] }
 proptest = "1"
 rayon = "1.10"
 regex = "1.11"
