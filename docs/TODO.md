@@ -54,7 +54,6 @@ feature is not listed here and not marked ✅ in `docs/ARCHITECTURE.md`, treat i
   generation they query (≈ 10–40 ms at 5M entries on the VM). File-only changes could patch it.
 - [ ] **libblkid fallback** for volume UUIDs where `/dev/disk/by-uuid` doesn’t exist.
 - [ ] **Scanner threads per device type** (`queue/rotational`).
-- [ ] **Volume labels** (`/dev/disk/by-label`) in the status and `volume:`.
 - [ ] **`rc:` / recent changes**: needs a change log in the daemon.
 - [ ] **Polkit** for admin requests (rescan) from non-root users; today only root may rescan.
 - [ ] **Filesystem matrix beyond ext4/xfs:** btrfs, f2fs, vfat, exfat and ntfs3 run in the CI job;

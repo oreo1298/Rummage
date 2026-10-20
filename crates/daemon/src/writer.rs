@@ -432,7 +432,7 @@ impl Writer {
                     &ident.key,
                     &mount_path,
                     &p.mount.fstype,
-                    None,
+                    uuids.label(p.mount.major, p.mount.minor),
                     &root_meta,
                 ) {
                     Ok((vid, _)) => {

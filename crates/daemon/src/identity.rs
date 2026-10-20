@@ -11,38 +11,78 @@ use std::os::unix::fs::MetadataExt;
 
 use crate::mounts::{Class, MountInfo};
 
-/// Maps device numbers (`major`, `minor`) to filesystem UUIDs.
+/// Maps device numbers (`major`, `minor`) to filesystem UUIDs and labels.
 #[derive(Clone, Debug, Default)]
-pub struct UuidMap(HashMap<(u32, u32), String>);
+pub struct UuidMap {
+    uuids: HashMap<(u32, u32), String>,
+    labels: HashMap<(u32, u32), String>,
+}
 
-impl UuidMap {
-    /// Reads `/dev/disk/by-uuid` (empty if it doesn’t exist, as in many containers).
-    #[must_use]
-    pub fn load() -> Self {
-        let mut map = HashMap::new();
-        if let Ok(dir) = std::fs::read_dir("/dev/disk/by-uuid") {
-            for e in dir.flatten() {
-                let Some(uuid) = e.file_name().to_str().map(str::to_owned) else {
-                    continue;
-                };
-                // Follow the symlink to the device node and take its device number.
-                if let Ok(md) = std::fs::metadata(e.path()) {
-                    let rdev = md.rdev();
-                    map.insert((libc::major(rdev), libc::minor(rdev)), uuid);
-                }
+/// Reads a `/dev/disk/by-*` directory: device number → link name (udev escapes decoded).
+fn read_links(dir: &str) -> HashMap<(u32, u32), String> {
+    let mut map = HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let Some(name) = e.file_name().to_str().map(unescape_udev) else {
+                continue;
+            };
+            // Follow the symlink to the device node and take its device number.
+            if let Ok(md) = std::fs::metadata(e.path()) {
+                let rdev = md.rdev();
+                map.insert((libc::major(rdev), libc::minor(rdev)), name);
             }
         }
-        Self(map)
+    }
+    map
+}
+
+/// Decodes udev’s `\xHH` escapes (`My\x20Disk` → `My Disk`).
+fn unescape_udev(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\'
+            && b.get(i + 1) == Some(&b'x')
+            && let Some(v) = s
+                .get(i + 2..i + 4)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(v);
+            i += 4;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+impl UuidMap {
+    /// Reads `/dev/disk/by-uuid` and `/dev/disk/by-label` (empty where they don’t exist, as in
+    /// many containers).
+    #[must_use]
+    pub fn load() -> Self {
+        Self {
+            uuids: read_links("/dev/disk/by-uuid"),
+            labels: read_links("/dev/disk/by-label"),
+        }
     }
 
     #[must_use]
     pub fn get(&self, major: u32, minor: u32) -> Option<&str> {
-        self.0.get(&(major, minor)).map(String::as_str)
+        self.uuids.get(&(major, minor)).map(String::as_str)
+    }
+
+    /// The filesystem label of a device.
+    #[must_use]
+    pub fn label(&self, major: u32, minor: u32) -> Option<&str> {
+        self.labels.get(&(major, minor)).map(String::as_str)
     }
 
     #[cfg(test)]
     pub fn insert(&mut self, major: u32, minor: u32, uuid: &str) {
-        self.0.insert((major, minor), uuid.to_owned());
+        self.uuids.insert((major, minor), uuid.to_owned());
     }
 }
 
@@ -113,6 +153,7 @@ mod tests {
             "uuid:aaaa-bbbb:subvol=256"
         );
         assert_eq!(identify(&m[1], Class::Local, &u).key, "uuid:1234-ABCD");
+        assert_eq!(unescape_udev("My\\x20Disk"), "My Disk");
         let nas = identify(&m[2], Class::Network, &u);
         assert_eq!(nas.key, "net:nfs4:nas:/export:/");
         assert!(nas.stable);

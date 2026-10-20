@@ -171,9 +171,14 @@ fn status(client: &mut Client) -> Result<u8, Failure> {
             UpdateMethod::Polling => "polling",
             UpdateMethod::Static => "static",
         };
+        let label = v
+            .label
+            .as_deref()
+            .map(|l| format!(" [{l}]"))
+            .unwrap_or_default();
         let _ = writeln!(
             out,
-            "  {:<32} {:<8} {:<9} {:<9} {:>10}  {}",
+            "  {:<32} {:<8} {:<9} {:<9} {:>10}  {}{label}",
             String::from_utf8_lossy(&v.mount_path),
             v.fstype,
             state,
