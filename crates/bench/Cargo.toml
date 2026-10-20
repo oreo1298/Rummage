@@ -22,6 +22,18 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+criterion.workspace = true
+gungraun = "0.20"
+rayon.workspace = true
+jiff.workspace = true
+
+[[bench]]
+name = "core"
+harness = false
+
+[[bench]]
+name = "instructions"
+harness = false
 
 [lints]
 workspace = true

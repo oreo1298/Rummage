@@ -1,0 +1,36 @@
+# Result ordering (ordered = true compares the exact order).
+
+[[case]]
+query = "ext:jpg"
+ordered = true
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/thumbs/IMG_0001.JPG", "/c/pics/IMG_0002.jpg"]
+source = "Fossick: name order, equal names by path"
+
+[[case]]
+query = "audio:"
+sort = "size"
+descending = true
+ordered = true
+expect = ["/c/music/Track 01.wav", "/c/music/song.flac", "/c/music/song.mp3"]
+source = "Sort by size, descending"
+
+[[case]]
+query = "audio:"
+sort = "dm"
+ordered = true
+expect = ["/c/music/song.flac", "/c/music/song.mp3", "/c/music/Track 01.wav"]
+source = "Sort by date modified, ties by name"
+
+[[case]]
+query = "parent:/c/pics"
+sort = "path"
+ordered = true
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs"]
+source = "Sort by path"
+
+[[case]]
+query = "parent:/c/docs"
+sort = "ext"
+ordered = true
+expect = ["/c/docs/readme", "/c/docs/word-doc.docx", "/c/docs/archive.tar.gz", "/c/docs/café-nfd.md", "/c/docs/Café.md", "/c/docs/report-old.pdf", "/c/docs/Report.PDF", "/c/docs/notes.txt", "/c/docs/Straße.txt", "/c/docs/ΣΟΦΙΑ.txt"]
+source = "Sort by extension, ties by name (e + U+0301 sorts before é: code-point collation)"

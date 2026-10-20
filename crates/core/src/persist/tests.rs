@@ -150,3 +150,35 @@ fn detects_corruption_and_bad_files() {
     // Truncation.
     assert!(load_bytes(&bytes[..bytes.len() / 2], Verify::All).is_err());
 }
+
+#[test]
+fn corrupt_section_values_are_rejected_without_panicking() {
+    // Regression for a fuzzer finding: a name index entry near u64::MAX overflowed an addition.
+    let w = sample(false);
+    let g = w.handle().load();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("i.fsidx");
+    write(&g, &path).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    let header = Header::read_from_bytes(&bytes[..HEADER_LEN as usize]).unwrap();
+    let table_len = header.sections as usize * 32;
+    let table_start = header.table_offset as usize;
+    let table = <[SectionEntry]>::ref_from_bytes(&bytes[table_start..table_start + table_len])
+        .unwrap()
+        .to_vec();
+    let idx = table
+        .iter()
+        .find(|s| s.kind == Kind::NameIndex as u16)
+        .unwrap();
+    let at = idx.offset as usize;
+    bytes[at..at + 8].copy_from_slice(&(u64::MAX - 1).to_le_bytes());
+    assert!(matches!(
+        load_bytes(&bytes, Verify::Unchecked),
+        Err(PersistError::Corrupt(_))
+    ));
+    // With checksums on, the same corruption is a checksum error.
+    assert!(matches!(
+        load_bytes(&bytes, Verify::All),
+        Err(PersistError::Checksum(_))
+    ));
+}

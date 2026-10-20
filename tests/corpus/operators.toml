@@ -1,0 +1,66 @@
+# Operators, grouping, quoting. Source: voidtools “Searching” help (operators table) unless noted.
+
+[[case]]
+query = "report"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Searching: default is a case-insensitive substring match on the name"
+
+[[case]]
+query = "report pdf"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Searching: space = AND"
+
+[[case]]
+query = "report !old"
+expect = ["/c/docs/Report.PDF"]
+source = "Searching: ! = NOT"
+
+[[case]]
+query = "report|song"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf", "/c/music/song.flac", "/c/music/song.mp3"]
+source = "Searching: | = OR"
+
+[[case]]
+query = "song mp3|flac"
+expect = ["/c/music/song.flac", "/c/music/song.mp3"]
+source = "Searching: OR binds tighter than AND"
+
+[[case]]
+query = "<report|song> pdf"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Searching: < > grouping"
+
+[[case]]
+query = "!<a|e|i|o|u>"
+expect = ["/c", "/c/deep/1", "/c/deep/1/2", "/c/deep/1/2/3", "/c/docs/ΣΟΦΙΑ.txt"]
+source = "Fossick: NOT of a group; Greek capital alpha is not ASCII a"
+
+[[case]]
+query = "\"a b\""
+expect = ["/c/a b.txt"]
+source = "Searching: double quotes search for an exact phrase"
+
+[[case]]
+query = "a\" \"b"
+expect = ["/c/a b.txt"]
+source = "Searching: quotes may appear anywhere in a term"
+
+[[case]]
+query = "a b"
+expect = ["/c/a b.txt", "/c/bad\\xFF.bin"]
+source = "Searching: unquoted space is AND"
+
+[[case]]
+query = ""
+count = 43
+source = "Searching: an empty search matches everything"
+
+[[case]]
+query = "<report"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Fossick: unbalanced brackets are closed implicitly"
+
+[[case]]
+query = "report>"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Fossick: stray > is ignored"

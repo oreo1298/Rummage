@@ -1,0 +1,117 @@
+# Date functions and constants. Clock: Wednesday 2024-06-12 15:30 UTC; weeks start on Monday.
+# Source: voidtools “Search Functions” (date syntax, date constants) and forum clarifications.
+
+[[case]]
+query = "dm:today"
+expect = ["/c/docs/Report.PDF"]
+source = "Search Functions: today"
+
+[[case]]
+query = "dm:yesterday"
+expect = ["/c/docs/Straße.txt"]
+source = "Search Functions: yesterday"
+
+[[case]]
+query = "dm:thisweek"
+expect = ["/c/docs/Report.PDF", "/c/docs/Straße.txt", "/c/docs/notes.txt"]
+source = "Search Functions: this<unit>"
+
+[[case]]
+query = "dm:lastweek"
+expect = ["/c/docs/word-doc.docx", "/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Forum: lastweek = the previous calendar week"
+
+[[case]]
+query = "dm:thismonth"
+expect = ["/c/docs", "/c/docs/Report.PDF", "/c/docs/Straße.txt", "/c/docs/notes.txt", "/c/docs/word-doc.docx", "/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Search Functions: thismonth"
+
+[[case]]
+query = "dm:mtd"
+expect = ["/c/docs", "/c/docs/Report.PDF", "/c/docs/Straße.txt", "/c/docs/notes.txt", "/c/docs/word-doc.docx", "/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Search Functions: mtd (month to date)"
+
+[[case]]
+query = "dm:lastmonth"
+expect = ["/c/docs/Café.md", "/c/docs/café-nfd.md"]
+source = "Search Functions: last<unit>"
+
+[[case]]
+query = "dm:past3days"
+expect = ["/c/docs/Report.PDF", "/c/docs/Straße.txt", "/c/docs/notes.txt"]
+source = "Forum: past = rolling window ending now"
+
+[[case]]
+query = "dm:last2hours"
+expect = []
+source = "Search Functions: last<N><units>"
+
+[[case]]
+query = "dm:2022"
+expect = ["/c/music/Track 01.wav", "/c/music/song.flac", "/c/music/song.mp3"]
+source = "Search Functions: year"
+
+[[case]]
+query = "dm:<2022"
+expect = ["/c/big/huge.iso", "/c/video/movie.mkv"]
+source = "Search Functions: comparison before a date"
+
+[[case]]
+query = "dm:2023-01-01"
+expect = ["/c/docs/report-old.pdf"]
+source = "Search Functions: ISO date"
+
+[[case]]
+query = "dm:2024-03"
+expect = ["/c/docs/archive.tar.gz"]
+source = "Fossick: year-month"
+
+[[case]]
+query = "dm:march"
+expect = ["/c/docs/archive.tar.gz"]
+source = "Search Functions: month names (this year)"
+
+[[case]]
+query = "dm:monday"
+expect = ["/c/docs/notes.txt"]
+source = "Search Functions: weekday names (most recent)"
+
+[[case]]
+query = "dm:2024-05..2024-05"
+expect = ["/c/docs/Café.md", "/c/docs/café-nfd.md"]
+source = "Search Functions: start..end range"
+
+[[case]]
+query = "dm:>=2024-06-10 file:"
+expect = ["/c/docs/Report.PDF", "/c/docs/Straße.txt", "/c/docs/notes.txt"]
+source = "Search Functions: >= comparison"
+
+[[case]]
+query = "dc:2024-06-12"
+expect = ["/c/docs/Report.PDF"]
+source = "Search Functions: dc: (date created = birth time on Linux)"
+
+[[case]]
+query = "dc:2022 ext:pdf"
+expect = ["/c/docs/report-old.pdf"]
+source = "Search Functions: dc:"
+
+[[case]]
+query = "dc:unknown ext:pdf"
+expect = []
+source = "Search Functions: unknown"
+
+[[case]]
+query = "da:today"
+expect = ["/c/docs/notes.txt"]
+source = "Search Functions: da: (needs access-time indexing, enabled for the corpus)"
+
+[[case]]
+query = "dch:yesterday"
+expect = ["/c/docs/Straße.txt"]
+source = "Fossick (Linux): dch: = status change time (ctime)"
+
+[[case]]
+query = "dm:2days"
+expect = ["/c/docs/Report.PDF", "/c/docs/Straße.txt"]
+source = "Search Functions (1.5): bare duration = within the last N units"

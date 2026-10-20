@@ -39,7 +39,57 @@ enum Cmd {
         #[arg(long)]
         scattered: bool,
     },
+    /// Query latency (p50/p99) for the representative query set and a typing simulation.
+    Query {
+        #[arg(long, default_value_t = 5_000_000)]
+        entries: usize,
+        #[arg(long, default_value_t = 30)]
+        runs: usize,
+    },
+    /// Snapshot write and load times (warm and cold page cache) and time to first result.
+    Load {
+        #[arg(long, default_value_t = 5_000_000)]
+        entries: usize,
+        /// Where to write the snapshot.
+        #[arg(long)]
+        file: std::path::PathBuf,
+    },
+    /// Generate a tree on disk and time a full scan (cold and warm cache).
+    Scan {
+        #[arg(long, default_value_t = 1_000_000)]
+        entries: usize,
+        /// Directory to create the tree in (deleted afterwards).
+        #[arg(long)]
+        dir: std::path::PathBuf,
+        /// Keep the generated tree.
+        #[arg(long)]
+        keep: bool,
+    },
 }
+
+/// The representative query set (20 queries) used for latency numbers.
+pub const QUERIES: [&str; 20] = [
+    "a",
+    "re",
+    "rep",
+    "report",
+    "report 2023",
+    "report|invoice",
+    "*.pdf",
+    "ext:jpg;png",
+    "size:>100mb",
+    "dm:thisyear",
+    "folder:",
+    "!a",
+    "café",
+    "nodiacritics:cafe",
+    "regex:^data_[0-9]+",
+    "path:music/",
+    "src/main",
+    "ww:test",
+    "case:Report",
+    "audio:",
+];
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum ShapeArg {
@@ -279,6 +329,223 @@ fn storm(entries: usize, events: usize, batch: usize, scattered: bool) {
     }
 }
 
+fn compile(q: &str) -> fossick_core::query::Compiled {
+    use fossick_core::query::{
+        Clock, CompileContext, Macros, NumericIds, SearchOptions, compile_str,
+    };
+    let macros = Macros::default();
+    let ctx = CompileContext {
+        options: SearchOptions::default(),
+        clock: Clock::system(),
+        macros: &macros,
+        users: &NumericIds,
+    };
+    compile_str(q, &ctx).expect("benchmark queries compile")
+}
+
+/// Runs one query (sorted by name) and returns (elapsed, result count).
+fn timed_search(
+    g: &std::sync::Arc<fossick_core::Generation>,
+    c: &fossick_core::query::Compiled,
+) -> (Duration, usize) {
+    use fossick_core::search::{SearchContext, Sort, search};
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let ctx = SearchContext::basic(&cancel);
+    let t = Instant::now();
+    let r = search(g, c, Sort::default(), &ctx).expect("not cancelled");
+    // Include fetching the first visible window (path building for 50 rows).
+    for &id in r.ids.iter().take(50) {
+        std::hint::black_box(g.path(id));
+    }
+    (t.elapsed(), r.ids.len())
+}
+
+fn query(entries: usize, runs: usize) {
+    let t = Instant::now();
+    let (w, _) = build_index(&TreeSpec::new(entries));
+    let g = w.handle().load();
+    println!(
+        "built {} entries in {:.1} s; {} runs per query, sorted by name, first 50 rows fetched",
+        g.len(),
+        t.elapsed().as_secs_f64(),
+        runs
+    );
+    println!();
+    println!("| query | results | p50 (ms) | p99 (ms) |");
+    println!("|---|---:|---:|---:|");
+    let mut all_p99 = Vec::new();
+    for q in QUERIES {
+        let c = compile(q);
+        let mut times = Vec::with_capacity(runs);
+        let mut n = 0;
+        for _ in 0..runs {
+            let (d, count) = timed_search(&g, &c);
+            times.push(d);
+            n = count;
+        }
+        times.sort_unstable();
+        let p50 = percentile(&times, 0.5).as_secs_f64() * 1e3;
+        let p99 = percentile(&times, 0.99).as_secs_f64() * 1e3;
+        all_p99.push(p99);
+        println!("| `{q}` | {n} | {p50:.2} | {p99:.2} |");
+    }
+    all_p99.sort_by(f64::total_cmp);
+    println!();
+    println!(
+        "worst p99 over the set: {:.2} ms",
+        all_p99.last().copied().unwrap_or(0.0)
+    );
+    println!();
+    println!("Typing simulation (each keystroke is a new query, fresh search):");
+    println!();
+    println!("| keystrokes | results | p50 (ms) | p99 (ms) |");
+    println!("|---|---:|---:|---:|");
+    for k in 1..="report".len() {
+        let q = &"report"[..k];
+        let c = compile(q);
+        let mut times = Vec::new();
+        let mut n = 0;
+        for _ in 0..runs {
+            let (d, count) = timed_search(&g, &c);
+            times.push(d);
+            n = count;
+        }
+        times.sort_unstable();
+        println!(
+            "| `{q}` | {n} | {:.2} | {:.2} |",
+            percentile(&times, 0.5).as_secs_f64() * 1e3,
+            percentile(&times, 0.99).as_secs_f64() * 1e3
+        );
+    }
+}
+
+/// Drops `path` from the page cache (best effort) so the next read is cold.
+fn evict(path: &std::path::Path) {
+    use std::os::fd::AsRawFd;
+    if let Ok(f) = std::fs::File::open(path) {
+        // SAFETY: posix_fadvise only takes an fd and integer arguments; the fd is valid for the
+        // duration of the call.
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
+        }
+    }
+}
+
+fn load(entries: usize, file: &std::path::Path) -> Result<()> {
+    use fossick_core::persist::{self, Verify};
+    let (w, _) = build_index(&TreeSpec::new(entries));
+    let g = w.handle().load();
+    let t = Instant::now();
+    persist::write(&g, file)?;
+    let write_time = t.elapsed();
+    let size = std::fs::metadata(file)?.len();
+    drop(g);
+    drop(w);
+    trim();
+    let c = compile("report");
+    println!("| metric | value |");
+    println!("|---|---|");
+    println!("| entries | {entries} |");
+    #[allow(clippy::cast_precision_loss)]
+    let per = size as f64 / entries as f64;
+    println!(
+        "| snapshot size | {:.0} MiB ({per:.0} B/entry) |",
+        mib(size)
+    );
+    println!(
+        "| snapshot write (tmp + fsync + rename) | {:.2} s |",
+        write_time.as_secs_f64()
+    );
+    for (label, cold, verify) in [
+        (
+            "cold cache, verify essential sections",
+            true,
+            Verify::Essential,
+        ),
+        (
+            "warm cache, verify essential sections",
+            false,
+            Verify::Essential,
+        ),
+        ("warm cache, verify all sections", false, Verify::All),
+    ] {
+        if cold {
+            evict(file);
+        }
+        let t = Instant::now();
+        let snap = persist::load(file, verify)?;
+        let loaded = t.elapsed();
+        let g = std::sync::Arc::new(snap.generation);
+        let (q, n) = timed_search(&g, &c);
+        println!(
+            "| load ({label}) | {:.0} ms; first query `report` {:.1} ms ({n} results); searchable after {:.0} ms |",
+            loaded.as_secs_f64() * 1e3,
+            q.as_secs_f64() * 1e3,
+            (loaded + q).as_secs_f64() * 1e3
+        );
+    }
+    std::fs::remove_file(file)?;
+    Ok(())
+}
+
+fn scan(entries: usize, dir: &std::path::Path, keep: bool) -> Result<()> {
+    use fossick_core::{IndexConfig, IndexWriter};
+    use fossick_scan::{ScanOptions, scan_into, stat_path};
+    let root = dir.join("tree");
+    if !root.exists() {
+        let t = Instant::now();
+        fossick_bench::generate_on_disk(&TreeSpec::new(entries), &root)?;
+        println!(
+            "generated {entries} entries on disk in {:.1} s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+    println!("| run | entries | dirs | scan | scan + index build |");
+    println!("|---|---:|---:|---:|---:|");
+    for run in [
+        "cold cache (drop_caches)",
+        "warm cache",
+        "warm cache, idle priority",
+    ] {
+        if run.starts_with("cold") {
+            let _ = std::process::Command::new("sync").status();
+            let dropped = std::fs::write("/proc/sys/vm/drop_caches", "3").is_ok();
+            if !dropped {
+                println!("| (could not drop caches; cold run is not cold) | | | | |");
+            }
+        }
+        let (meta, _, _) = stat_path(&root)?;
+        let mut w = IndexWriter::new(IndexConfig::default());
+        let (_, r) = w.add_volume(
+            "bench",
+            root.as_os_str().as_encoded_bytes(),
+            "disk",
+            None,
+            &meta,
+        )?;
+        let opts = ScanOptions {
+            low_priority: run.ends_with("idle priority"),
+            ..ScanOptions::default()
+        };
+        let t = Instant::now();
+        let stats = scan_into(&root, &mut w, r, &opts)?;
+        let scanned = t.elapsed();
+        w.publish();
+        println!(
+            "| {run} | {} | {} | {:.2} s | {:.2} s |",
+            stats.entries,
+            stats.dirs,
+            scanned.as_secs_f64(),
+            t.elapsed().as_secs_f64()
+        );
+    }
+    if !keep {
+        std::fs::remove_dir_all(dir.join("tree"))?;
+    }
+    Ok(())
+}
+
 /// Number of entries in each directory's subtree.
 fn subtree_sizes(g: &fossick_core::Generation) -> std::collections::HashMap<EntryId, usize> {
     let mut sizes = std::collections::HashMap::new();
@@ -309,6 +576,9 @@ fn main() -> Result<()> {
             batch,
             scattered,
         } => storm(entries, events, batch, scattered),
+        Cmd::Query { entries, runs } => query(entries, runs),
+        Cmd::Load { entries, file } => load(entries, &file)?,
+        Cmd::Scan { entries, dir, keep } => scan(entries, &dir, keep)?,
     }
     Ok(())
 }

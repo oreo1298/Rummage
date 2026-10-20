@@ -77,9 +77,11 @@ a corrupt snapshot can’t loop forever.
 The writer thread owns structures that searches never need. They are rebuilt in the background
 after a snapshot load:
 
-- **Child lists** per directory: sorted by raw name bytes, with small pending-add and pending-remove
-  buffers that are compacted lazily, so a storm of 100k creates in one directory isn’t quadratic.
-  Used for name lookup on events, enumeration, subtree removal and rescan diffs.
+- **Child lists** per directory: `(name hash, id)` pairs kept sorted, with small pending-add and
+  pending-remove buffers that are compacted lazily (threshold √n), so a storm of 100k creates in
+  one directory isn’t quadratic. The stored hash never changes while a pair is in the list, so lazy
+  removal stays correct across renames. Used for name lookup on events, enumeration, subtree
+  removal and rescan diffs. ✅
 - **Directory handle map** (Phase 2): raw `fsid + file handle` bytes → `DirId`, captured with
   `name_to_handle_at` during scans, so a fanotify event resolves with one hash probe and no
   `open_by_handle_at` (which would return ESTALE once the directory is gone).
@@ -118,9 +120,12 @@ tables (`Vec<Arc<…>>`) and copies only pages touched since the last publish.
   | size | size (folder size for directories) | `name_key` |
   | date modified | mtime | `name_key` |
 
-- An order is a persistent sequence of `Arc<[u32]>` blocks (≤ 4096 ids). Batched inserts and
-  removals copy only the touched blocks; if more than 1/8 of an order is dirty, it’s rebuilt with a
-  parallel sort instead.
+- An order is a persistent sequence of `Arc<[u32]>` blocks (≤ 512 ids) with cached fence keys
+  (the key of each block’s first id), so locating a block needs no key computation. Removals find
+  ids by scanning one block (no key computation at all), and inserts binary-search inside one
+  block. Only touched blocks are copied; the four orders are updated in parallel. If more than 1/8
+  of an order is dirty, it is rebuilt with a parallel sort instead. Fences are refreshed after
+  monotone relabelling. ✅
 - Extension, type, date created, date accessed and run-count sorts are computed when requested (a
   parallel sort of the result ids), not maintained. ⏳ Maintaining them after first use is a
   Phase 6 optimisation.
@@ -220,8 +225,9 @@ through it.
 **Highlights** are computed only for rows a client fetches, by re-running the positive name or path
 leaves on that row.
 
-**Refinement.** If the new query string extends the previous one (search-as-you-type) and the
-predicate is monotone, only the previous result set is re-checked.
+**Refinement.** ⏳ If the new query string extends the previous one (search-as-you-type) and the
+predicate is monotone, only the previous result set is re-checked. Not implemented yet: full
+searches already meet the latency target on the development VM (see BENCHMARKS.md).
 
 ## 4. Daemon (Phase 2)
 
@@ -367,7 +373,7 @@ propagation into the service’s namespace works.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Core (index, persistence, full query parser, matcher, sorting), in-process CLI, benchmark harness | 🚧 |
+| 1 | Core (index, persistence, full query parser, matcher, sorting), in-process CLI, benchmark harness | ✅ |
 | 2 | Daemon: mounts, universal scanner, fanotify/inotify/polling, reconciliation, IPC, permission filtering, systemd unit, CLI over the socket, user mode | ⏳ |
 | 3 | Qt/Kirigami GUI | ⏳ |
 | 4 | Packaging (Arch first, then deb, rpm, tarball), README, release CI | ⏳ |

@@ -1,0 +1,36 @@
+# Queries that must fail with a clear error instead of silently matching.
+
+[[case]]
+query = "width:100"
+error = "NotSupported"
+source = "Media properties are not indexed yet (docs/TODO.md)"
+
+[[case]]
+query = "tag:work"
+error = "NotSupported"
+source = "Tags arrive in Phase 6"
+
+[[case]]
+query = "size:abc"
+error = "BadArgument"
+source = "Invalid size"
+
+[[case]]
+query = "dm:someday"
+error = "BadArgument"
+source = "Invalid date"
+
+[[case]]
+query = "regex:("
+error = "Regex"
+source = "Invalid regular expression"
+
+[[case]]
+query = "owner:no_such_user_zz"
+error = "UnknownId"
+source = "Unknown user name"
+
+[[case]]
+query = "empty:x"
+error = "BadArgument"
+source = "Function without arguments given one"

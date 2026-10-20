@@ -107,6 +107,12 @@ struct Cli {
     /// Scanner threads for --local (default: all CPUs).
     #[arg(long, value_name = "N", default_value_t = 0)]
     threads: usize,
+    /// Index access times too (enables da: and the date-accessed sort for --local).
+    #[arg(long)]
+    atime: bool,
+    /// Define a macro, e.g. --macro 'media=audio:|video:' (repeatable).
+    #[arg(long = "macro", value_name = "NAME=QUERY")]
+    macros: Vec<String>,
 }
 
 fn main() -> ExitCode {
@@ -149,7 +155,9 @@ fn load_generation(cli: &Cli) -> Result<Arc<Generation>, Failure> {
         .map_err(|e| (exit::IO_ERROR, format!("{}: {e}", dir.display())))?;
     let (meta, _, _) =
         stat_path(&dir).map_err(|e| (exit::IO_ERROR, format!("{}: {e}", dir.display())))?;
-    let mut w = IndexWriter::new(IndexConfig::default());
+    let mut w = IndexWriter::new(IndexConfig {
+        track_atime: cli.atime,
+    });
     let (_, root) = w
         .add_volume(
             "local",
@@ -204,7 +212,13 @@ fn run(cli: &Cli) -> Result<u8, Failure> {
         match_diacritics: !cli.ignore_diacritics,
         ..SearchOptions::default()
     };
-    let macros = Macros::default();
+    let mut macros = Macros::default();
+    for m in &cli.macros {
+        let (name, query) = m
+            .split_once('=')
+            .ok_or_else(|| (2, format!("--macro expects NAME=QUERY, got {m:?}")))?;
+        macros.user.insert(name.trim().to_owned(), query.to_owned());
+    }
     let users = users::SystemUsers;
     let ctx = CompileContext {
         options,

@@ -213,6 +213,9 @@ pub enum Verify {
     /// Verify the sections searches touch first now; check the rest later with
     /// [`Snapshot::verify_deferred`].
     Essential,
+    /// Skip checksums entirely. Only for fuzzing the loader’s bounds checks; never use this for
+    /// real snapshots.
+    Unchecked,
 }
 
 /// A loaded snapshot.
@@ -562,7 +565,8 @@ fn mapped_column<T: Pod>(
 ) -> Result<Column<T>, PersistError> {
     let s = secs.get(kind, 0)?;
     let page_bytes = PAGE_SIZE * std::mem::size_of::<T>();
-    if s.len != (pages * page_bytes) as u64 || s.elem_size as usize != std::mem::size_of::<T>() {
+    let expected = pages.checked_mul(page_bytes).map(|b| b as u64);
+    if Some(s.len) != expected || s.elem_size as usize != std::mem::size_of::<T>() {
         return Err(PersistError::Corrupt(format!(
             "section {kind:?} has wrong size"
         )));
@@ -623,16 +627,23 @@ fn from_mapping(map: Arc<Mapping>, verify: Verify) -> Result<Snapshot, PersistEr
     for s in &secs.table {
         let entry = (format!("{}/{}", s.kind, s.sub), s.offset, s.len, s.checksum);
         let essential = ESSENTIAL.iter().any(|k| *k as u16 == s.kind);
-        if essential || verify == Verify::All {
-            now.push(entry);
-        } else {
-            later.push(entry);
+        match verify {
+            Verify::Unchecked => later.push(entry),
+            Verify::All => now.push(entry),
+            Verify::Essential if essential => now.push(entry),
+            Verify::Essential => later.push(entry),
         }
     }
     verify_sections(bytes, &now)?;
 
     let meta: Meta = serde_json::from_slice(secs.bytes(Kind::Meta, 0)?)
         .map_err(|e| PersistError::Corrupt(format!("meta: {e}")))?;
+    // Entry ids are u32 (page << 12 | slot), so there can be at most 2^20 pages; checking this
+    // before any allocation keeps corrupt metadata from requesting absurd amounts of memory.
+    let max_pages = 1usize << (32 - crate::index::PAGE_BITS);
+    if meta.pages > max_pages || meta.dir_pages > max_pages || meta.live > meta.pages * PAGE_SIZE {
+        return Err(PersistError::Corrupt("page counts".into()));
+    }
     let pages = meta.pages;
     let page_volume: Vec<u16> = secs.vec(Kind::PageVolume, 0)?;
     if page_volume.len() != pages {
@@ -651,12 +662,16 @@ fn from_mapping(map: Arc<Mapping>, verify: Verify) -> Result<Snapshot, PersistEr
     let mut names = Vec::with_capacity(pages);
     for p in 0..pages {
         let (start, len) = (name_index[2 * p], name_index[2 * p + 1]);
-        if start + len > nb.len {
+        if start.checked_add(len).is_none_or(|end| end > nb.len) {
             return Err(PersistError::Corrupt("name index".into()));
         }
+        let start = usize::try_from(start)
+            .ok()
+            .and_then(|s| s.checked_add(nb_base))
+            .ok_or_else(|| PersistError::Corrupt("name index".into()))?;
         let bytes_slice = MappedSlice::new(
             Arc::clone(&map),
-            nb_base + usize::try_from(start).unwrap_or(usize::MAX),
+            start,
             usize::try_from(len).unwrap_or(usize::MAX),
         )
         .ok_or_else(|| PersistError::Corrupt("names out of bounds".into()))?;

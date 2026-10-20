@@ -1,0 +1,31 @@
+[package]
+name = "fossick-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+fossick-core = { path = "../crates/core" }
+jiff = "0.2"
+
+# Not part of the main workspace (needs nightly + cargo-fuzz).
+[workspace]
+
+[[bin]]
+name = "query_parser"
+path = "fuzz_targets/query_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_loader"
+path = "fuzz_targets/snapshot_loader.rs"
+test = false
+doc = false
+bench = false

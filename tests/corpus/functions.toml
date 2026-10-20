@@ -1,0 +1,231 @@
+# Search functions. Source: voidtools “Search Functions” help unless noted.
+
+[[case]]
+query = "ext:pdf"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Search Functions: ext:<list>"
+
+[[case]]
+query = "ext:mp3;flac;wav"
+expect = ["/c/music/Track 01.wav", "/c/music/song.flac", "/c/music/song.mp3"]
+source = "Search Functions: ext: semicolon-delimited list"
+
+[[case]]
+query = "case:ext:JPG"
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Searching: modifiers apply to functions"
+
+[[case]]
+query = "ext:gz"
+expect = ["/c/docs/archive.tar.gz"]
+source = "Search Functions: ext: (last extension only)"
+
+[[case]]
+query = "ext:"
+expect = ["/c/.hidden", "/c/bin/link", "/c/bin/tool", "/c/docs/readme"]
+source = "Search Functions: ext: with no extension; a leading dot is not an extension"
+
+[[case]]
+query = "parent:/c/bin"
+expect = ["/c/bin/link", "/c/bin/run.sh", "/c/bin/tool"]
+source = "Search Functions: parent:<path> (not subfolders)"
+
+[[case]]
+query = "infolder:/C/BIN"
+expect = ["/c/bin/link", "/c/bin/run.sh", "/c/bin/tool"]
+source = "Search Functions: infolder: alias, case-insensitive"
+
+[[case]]
+query = "case:parent:/C/BIN"
+expect = []
+source = "Searching: case: applies to parent:"
+
+[[case]]
+query = "parent:/c/"
+expect = ["/c/.config", "/c/.hidden", "/c/a b.txt", "/c/bad\\xFF.bin", "/c/big", "/c/bin", "/c/deep", "/c/docs", "/c/empty", "/c/music", "/c/pics", "/c/private", "/c/video"]
+source = "Search Functions: parent: (trailing slash ignored)"
+
+[[case]]
+query = "depth:2 folder:"
+expect = ["/c/.config", "/c/big", "/c/bin", "/c/deep", "/c/docs", "/c/empty", "/c/music", "/c/pics", "/c/private", "/c/video"]
+source = "Search Functions: depth: (/c is depth 1)"
+
+[[case]]
+query = "depth:>5"
+expect = ["/c/deep/1/2/3/leaf.txt"]
+source = "Search Functions: depth: comparison"
+
+[[case]]
+query = "parents:6"
+expect = ["/c/deep/1/2/3/leaf.txt"]
+source = "Search Functions: parents: alias of depth:"
+
+[[case]]
+query = "len:1"
+expect = ["/c", "/c/deep/1", "/c/deep/1/2", "/c/deep/1/2/3"]
+source = "Search Functions: len: name length in characters"
+
+[[case]]
+query = "len:14"
+expect = ["/c/docs/archive.tar.gz", "/c/docs/report-old.pdf"]
+source = "Search Functions: len:"
+
+[[case]]
+query = "dupe:"
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Search Functions: dupe: (name by default, whole index)"
+
+[[case]]
+query = "sizedupe: size:<20 file:"
+expect = ["/c/.hidden", "/c/a b.txt", "/c/bad\\xFF.bin", "/c/deep/1/2/3/leaf.txt", "/c/docs/Café.md", "/c/docs/café-nfd.md", "/c/docs/readme", "/c/private/secret.key"]
+source = "Search Functions: sizedupe:"
+
+[[case]]
+query = "namepartdupe:"
+expect = ["/c/music/song.flac", "/c/music/song.mp3", "/c/pics/IMG_0001.JPG", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Search Functions: namepartdupe:"
+
+[[case]]
+query = "dupe:size;name"
+expect = []
+source = "Search Functions: dupe: with several properties"
+
+[[case]]
+query = "empty:"
+expect = ["/c/empty"]
+source = "Search Functions: empty:"
+
+[[case]]
+query = "child:song"
+expect = ["/c/music"]
+source = "Search Functions: child:"
+
+[[case]]
+query = "childfile:img"
+expect = ["/c/pics", "/c/pics/thumbs"]
+source = "Search Functions: childfile:"
+
+[[case]]
+query = "childfolder:thumbs"
+expect = ["/c/pics"]
+source = "Search Functions: childfolder:"
+
+[[case]]
+query = "childfolder:"
+expect = ["/c", "/c/deep", "/c/deep/1", "/c/deep/1/2", "/c/pics"]
+source = "Search Functions: childfolder: with no argument"
+
+[[case]]
+query = "childcount:0"
+expect = ["/c/empty"]
+source = "Search Functions: childcount:"
+
+[[case]]
+query = "childcount:3"
+expect = ["/c/bin", "/c/music", "/c/pics"]
+source = "Search Functions: childcount:"
+
+[[case]]
+query = "childfilecount:>5"
+expect = ["/c/docs"]
+source = "Search Functions: childfilecount:"
+
+[[case]]
+query = "childfoldercount:1"
+expect = ["/c/deep", "/c/deep/1", "/c/deep/1/2", "/c/pics"]
+source = "Search Functions: childfoldercount:"
+
+[[case]]
+query = "startwith:img"
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Search Functions: startwith:"
+
+[[case]]
+query = "case:endwith:.JPG"
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Search Functions: endwith:"
+
+[[case]]
+query = "root:"
+expect = ["/c"]
+source = "Search Functions: root: (entries without a parent folder: volume roots)"
+
+[[case]]
+query = "symlink:"
+expect = ["/c/bin/link"]
+source = "Fossick (Linux): symlink:"
+
+[[case]]
+query = "hidden:"
+expect = ["/c/.config", "/c/.hidden"]
+source = "Fossick (Linux): hidden: = dot names"
+
+[[case]]
+query = "attrib:H"
+expect = ["/c/.config", "/c/.hidden"]
+source = "Search Functions: attrib:H (hidden = dot name on Linux)"
+
+[[case]]
+query = "attrib:DH"
+expect = ["/c/.config"]
+source = "Search Functions: attrib: letters combine (all must match)"
+
+[[case]]
+query = "attrib:L"
+expect = ["/c/bin/link"]
+source = "Search Functions: attrib:L (reparse point = symlink on Linux)"
+
+[[case]]
+query = "attrib:R"
+expect = []
+source = "Search Functions: attrib:R (no write permission bits on Linux)"
+
+[[case]]
+query = "perm:755 file:"
+expect = ["/c/bin/run.sh", "/c/bin/tool"]
+source = "Fossick (Linux): perm: octal"
+
+[[case]]
+query = "perm:u+x file:"
+expect = ["/c/bin/link", "/c/bin/run.sh", "/c/bin/tool"]
+source = "Fossick (Linux): perm: symbolic"
+
+[[case]]
+query = "perm:o-r"
+expect = ["/c/private", "/c/private/secret.key"]
+source = "Fossick (Linux): perm: bits not set"
+
+[[case]]
+query = "owner:1000"
+expect = ["/c/private", "/c/private/secret.key"]
+source = "Fossick (Linux): owner: (uid or user name)"
+
+[[case]]
+query = "group:1000 file:"
+expect = ["/c/private/secret.key"]
+source = "Fossick (Linux): group:"
+
+[[case]]
+query = "fstype:corpusfs root:"
+expect = ["/c"]
+source = "Fossick: fstype:"
+
+[[case]]
+query = "volume:corpus root:"
+expect = ["/c"]
+source = "Fossick: volume: (label, identity or mount path)"
+
+[[case]]
+query = "fsi:0 root:"
+expect = ["/c"]
+source = "Search Functions: fsi: (volume index)"
+
+[[case]]
+query = "type:folder empty"
+expect = ["/c/empty"]
+source = "Search Functions: type: (folders)"
+
+[[case]]
+query = "runcount:0 song.mp3"
+expect = ["/c/music/song.mp3"]
+source = "Search Functions: runcount: (no run history here)"

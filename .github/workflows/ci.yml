@@ -37,3 +37,50 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --lib --bins
+
+  # Instruction counts (Callgrind) are deterministic, so they can gate: fail if any benchmark
+  # needs more than 10% more instructions than on the base commit. Wall-clock numbers are only
+  # reported (docs/BENCHMARKS.md), never gated, because shared runners are noisy.
+  bench-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y valgrind
+      - run: cargo install gungraun-runner --version 0.20.0 --locked
+      - name: Baseline from the base commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if git cat-file -e "${BASE}^{commit}" 2>/dev/null \
+             && git cat-file -e "${BASE}:crates/bench/benches/instructions.rs" 2>/dev/null; then
+            git checkout -q "$BASE"
+            cargo bench -p fossick-bench --bench instructions -- --save-baseline=base
+            git checkout -q "$GITHUB_SHA"
+            echo "HAVE_BASE=1" >> "$GITHUB_ENV"
+          else
+            echo "No comparable base commit; running without a baseline."
+          fi
+      - name: Compare (fails on a >10% instruction-count regression)
+        run: |
+          if [ "${HAVE_BASE:-0}" = 1 ]; then
+            cargo bench -p fossick-bench --bench instructions -- --baseline=base --callgrind-limits='ir=10%'
+          else
+            cargo bench -p fossick-bench --bench instructions
+          fi
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz each target for 60 s
+        run: |
+          mkdir -p fuzz/corpus/query_parser fuzz/corpus/snapshot_loader
+          cargo +nightly fuzz run query_parser fuzz/corpus/query_parser fuzz/seeds/query_parser -- -max_total_time=60
+          cargo +nightly fuzz run snapshot_loader fuzz/corpus/snapshot_loader fuzz/seeds/snapshot_loader -- -max_len=400000 -max_total_time=60

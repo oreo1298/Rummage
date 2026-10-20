@@ -1,0 +1,44 @@
+# Macros. Source: voidtools “Searching” (macros); Linux additions noted in docs/SYNTAX.md.
+
+[macros]
+media = "audio:|video:"
+
+[[case]]
+query = "audio:"
+expect = ["/c/music/Track 01.wav", "/c/music/song.flac", "/c/music/song.mp3"]
+source = "Searching: audio:"
+
+[[case]]
+query = "audio:track"
+expect = ["/c/music/Track 01.wav"]
+source = "Searching: macro with an argument"
+
+[[case]]
+query = "video:"
+expect = ["/c/video/movie.mkv"]
+source = "Searching: video:"
+
+[[case]]
+query = "pic:"
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Searching: pic:"
+
+[[case]]
+query = "doc:"
+expect = ["/c/a b.txt", "/c/deep/1/2/3/leaf.txt", "/c/docs/Café.md", "/c/docs/Report.PDF", "/c/docs/Straße.txt", "/c/docs/café-nfd.md", "/c/docs/notes.txt", "/c/docs/report-old.pdf", "/c/docs/word-doc.docx", "/c/docs/ΣΟΦΙΑ.txt"]
+source = "Searching: doc:"
+
+[[case]]
+query = "zip:"
+expect = ["/c/docs/archive.tar.gz"]
+source = "Searching: zip:"
+
+[[case]]
+query = "exe:"
+expect = ["/c/bin/run.sh", "/c/bin/tool"]
+source = "Fossick (Linux): exe: = executable regular files plus executable extensions"
+
+[[case]]
+query = "media:"
+expect = ["/c/music/Track 01.wav", "/c/music/song.flac", "/c/music/song.mp3", "/c/video/movie.mkv"]
+source = "Fossick: user-defined macros"

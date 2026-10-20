@@ -94,3 +94,48 @@ fn large_flat_directory() {
     assert_eq!(w.len(), 3001);
     let _ = EntryMeta::default();
 }
+
+#[test]
+fn content_search_reads_files() {
+    use std::sync::atomic::AtomicBool;
+
+    use fossick_core::query::{
+        Clock, CompileContext, Macros, NumericIds, SearchOptions, compile_str,
+    };
+    use fossick_core::search::{SearchContext, Sort, search};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::write(root.join("a.txt"), b"hello world").unwrap();
+    fs::write(root.join("b.txt"), b"HELLO there").unwrap();
+    // Needle straddling the 256 KiB read boundary.
+    let mut big = vec![b'x'; 256 * 1024 - 3];
+    big.extend_from_slice(b"needle");
+    fs::write(root.join("big.bin"), &big).unwrap();
+    fs::write(root.join("c.txt"), b"nothing").unwrap();
+    let (w, _) = build(root);
+    let g = w.handle().load();
+    let macros = Macros::default();
+    let ctx = CompileContext {
+        options: SearchOptions::default(),
+        clock: Clock::system(),
+        macros: &macros,
+        users: &NumericIds,
+    };
+    let names = |q: &str| {
+        let c = compile_str(q, &ctx).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut sc = SearchContext::basic(&cancel);
+        sc.content = Some(&content::FsContent);
+        let r = search(&g, &c, Sort::default(), &sc).unwrap();
+        r.ids
+            .iter()
+            .map(|&id| String::from_utf8_lossy(g.name(id)).into_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names("content:hello"), ["a.txt", "b.txt"]);
+    assert_eq!(names("case:content:hello"), ["a.txt"]);
+    assert_eq!(names("content:needle"), ["big.bin"]);
+    assert_eq!(names("ext:txt !content:hello"), ["c.txt"]);
+    assert_eq!(names("regex:content:\"wor.d\""), ["a.txt"]);
+}

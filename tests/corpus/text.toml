@@ -1,0 +1,201 @@
+# Wildcards, modifiers, Unicode. Source: voidtools “Searching” (wildcards, modifiers) unless noted.
+
+[[case]]
+query = "*.pdf"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Searching: * matches zero or more characters; wildcards match the whole name"
+
+[[case]]
+query = "IMG_000?.jpg"
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Searching: ? matches one character"
+
+[[case]]
+query = "?"
+expect = ["/c", "/c/deep/1", "/c/deep/1/2", "/c/deep/1/2/3"]
+source = "Searching: whole-name wildcard match"
+
+[[case]]
+query = "s*"
+expect = ["/c/docs/Straße.txt", "/c/music/song.flac", "/c/music/song.mp3", "/c/private/secret.key"]
+source = "Searching: whole-name wildcard match"
+
+[[case]]
+query = "*.tar.*"
+expect = ["/c/docs/archive.tar.gz"]
+source = "Searching: wildcards"
+
+[[case]]
+query = "rep*rt"
+expect = []
+source = "Searching: wildcard terms must match the whole name"
+
+[[case]]
+query = "nowfn:rep*rt"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Searching: nowholefilename: modifier"
+
+[[case]]
+query = "wfn:readme"
+expect = ["/c/docs/readme"]
+source = "Searching: wholefilename: modifier"
+
+[[case]]
+query = "case:report"
+expect = ["/c/docs/report-old.pdf"]
+source = "Searching: case: modifier"
+
+[[case]]
+query = "case:Report"
+expect = ["/c/docs/Report.PDF"]
+source = "Searching: case: modifier"
+
+[[case]]
+query = "nocase:REPORT"
+expect = ["/c/docs/Report.PDF", "/c/docs/report-old.pdf"]
+source = "Searching: nocase: modifier"
+
+[[case]]
+query = "report"
+options = { match_case = true }
+expect = ["/c/docs/report-old.pdf"]
+source = "Search > Match Case option"
+
+[[case]]
+query = "ww:song"
+expect = ["/c/music/song.flac", "/c/music/song.mp3"]
+source = "Searching: wholeword: / ww: modifier"
+
+[[case]]
+query = "ww:son"
+expect = []
+source = "Searching: wholeword: / ww: modifier"
+
+[[case]]
+query = "ww:01"
+expect = ["/c/music/Track 01.wav"]
+source = "Searching: wholeword: / ww: modifier"
+
+[[case]]
+query = "ww:img"
+expect = []
+source = "Fossick: underscore is a word character, so IMG_0001 contains no whole word 'img'"
+
+[[case]]
+query = "song"
+options = { whole_word = true }
+expect = ["/c/music/song.flac", "/c/music/song.mp3"]
+source = "Search > Match Whole Word option"
+
+[[case]]
+query = "path:usic/so"
+expect = ["/c/music/song.flac", "/c/music/song.mp3"]
+source = "Searching: path: modifier"
+
+[[case]]
+query = "docs/"
+expect = ["/c/docs/Café.md", "/c/docs/Report.PDF", "/c/docs/Straße.txt", "/c/docs/archive.tar.gz", "/c/docs/café-nfd.md", "/c/docs/notes.txt", "/c/docs/readme", "/c/docs/report-old.pdf", "/c/docs/word-doc.docx", "/c/docs/ΣΟΦΙΑ.txt"]
+source = "Searching: a term containing a path separator matches the full path"
+
+[[case]]
+query = "/c/pics/thumbs"
+expect = ["/c/pics/thumbs", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Searching: path match"
+
+[[case]]
+query = "nopath:docs/"
+expect = []
+source = "Searching: nopath: modifier"
+
+[[case]]
+query = "music"
+options = { match_path = true }
+expect = ["/c/music", "/c/music/Track 01.wav", "/c/music/song.flac", "/c/music/song.mp3"]
+source = "Search > Match Path option"
+
+[[case]]
+query = "path:*/thumbs/*"
+expect = ["/c/pics/thumbs/IMG_0001.JPG"]
+source = "Searching: wildcards with path:"
+
+[[case]]
+query = "regex:\"^song\\.(mp3|flac)$\""
+expect = ["/c/music/song.flac", "/c/music/song.mp3"]
+source = "Searching: regex: modifier (| must be quoted)"
+
+[[case]]
+query = "regex:^[0-9]$"
+expect = ["/c/deep/1", "/c/deep/1/2", "/c/deep/1/2/3"]
+source = "Searching: regex: modifier"
+
+[[case]]
+query = "case:regex:^IMG"
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Searching: modifiers combine"
+
+[[case]]
+query = "^img_000[12]\\.jpg$"
+options = { regex = true }
+expect = ["/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Search > Regex option (case-insensitive by default)"
+
+[[case]]
+query = "file:song"
+expect = ["/c/music/song.flac", "/c/music/song.mp3"]
+source = "Searching: file: modifier"
+
+[[case]]
+query = "folder:s"
+expect = ["/c/docs", "/c/music", "/c/pics", "/c/pics/thumbs"]
+source = "Searching: folder: modifier"
+
+[[case]]
+query = "folder:"
+expect = ["/c", "/c/.config", "/c/big", "/c/bin", "/c/deep", "/c/deep/1", "/c/deep/1/2", "/c/deep/1/2/3", "/c/docs", "/c/empty", "/c/music", "/c/pics", "/c/pics/thumbs", "/c/private", "/c/video"]
+source = "Searching: folder: alone matches all folders"
+
+[[case]]
+query = "café"
+expect = ["/c/docs/Café.md", "/c/docs/café-nfd.md"]
+source = "Fossick: names are compared in NFC, so decomposed accents match"
+
+[[case]]
+query = "cafe"
+expect = []
+source = "Fossick: diacritics are matched by default"
+
+[[case]]
+query = "nodiacritics:cafe"
+expect = ["/c/docs/Café.md", "/c/docs/café-nfd.md"]
+source = "Searching (1.5): nodiacritics: modifier"
+
+[[case]]
+query = "cafe"
+options = { match_diacritics = false }
+expect = ["/c/docs/Café.md", "/c/docs/café-nfd.md"]
+source = "Search > Match Diacritics option off"
+
+[[case]]
+query = "straße"
+expect = ["/c/docs/Straße.txt"]
+source = "Fossick: Unicode simple case folding"
+
+[[case]]
+query = "STRASSE"
+expect = []
+source = "Fossick: simple folding does not expand ß to ss (documented)"
+
+[[case]]
+query = "σοφια"
+expect = ["/c/docs/ΣΟΦΙΑ.txt"]
+source = "Fossick: Unicode simple case folding (Greek)"
+
+[[case]]
+query = "ascii:CAFÉ"
+expect = []
+source = "Searching: ascii: folds ASCII letters only"
+
+[[case]]
+query = "bad"
+expect = ["/c/bad\\xFF.bin"]
+source = "Fossick: names that are not valid UTF-8 are searchable"

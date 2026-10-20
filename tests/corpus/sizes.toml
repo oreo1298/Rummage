@@ -1,0 +1,72 @@
+# Size function, units and constants. Folder sizes are the sum of all files below.
+# Source: voidtools “Search Functions” and the forum post listing size constants.
+
+[[case]]
+query = "size:>1gb"
+expect = ["/c", "/c/video", "/c/video/movie.mkv"]
+source = "Search Functions: size: applies to folders too (folder size indexing on)"
+
+[[case]]
+query = "size:>1gb file:"
+expect = ["/c/video/movie.mkv"]
+source = "Search Functions: size:>"
+
+[[case]]
+query = "size:10mb..100mb"
+expect = ["/c/music", "/c/music/Track 01.wav", "/c/music/song.flac"]
+source = "Search Functions: size range"
+
+[[case]]
+query = "size:empty"
+expect = ["/c/docs/readme", "/c/empty"]
+source = "Forum: empty = 0 bytes"
+
+[[case]]
+query = "size:tiny file:"
+expect = ["/c/.config/app.conf", "/c/.hidden", "/c/a b.txt", "/c/bad\\xFF.bin", "/c/big/tiny.dat", "/c/bin/link", "/c/bin/run.sh", "/c/bin/tool", "/c/deep/1/2/3/leaf.txt", "/c/docs/Café.md", "/c/docs/Report.PDF", "/c/docs/Straße.txt", "/c/docs/café-nfd.md", "/c/docs/notes.txt", "/c/docs/ΣΟΦΙΑ.txt", "/c/private/secret.key"]
+source = "Forum: tiny = up to 10 KB"
+
+[[case]]
+query = "size:small"
+expect = ["/c/docs/word-doc.docx", "/c/pics/thumbs", "/c/pics/thumbs/IMG_0001.JPG"]
+source = "Forum: small = 10 KB to 100 KB"
+
+[[case]]
+query = "size:medium"
+expect = []
+source = "Forum: medium = 100 KB to 1 MB"
+
+[[case]]
+query = "size:large"
+expect = ["/c/docs", "/c/docs/archive.tar.gz", "/c/docs/report-old.pdf", "/c/music/song.mp3", "/c/pics", "/c/pics/IMG_0001.JPG", "/c/pics/IMG_0002.jpg"]
+source = "Forum: large = 1 MB to 16 MB"
+
+[[case]]
+query = "size:huge"
+expect = ["/c/music", "/c/music/Track 01.wav", "/c/music/song.flac"]
+source = "Forum: huge = 16 MB to 128 MB"
+
+[[case]]
+query = "size:gigantic file:"
+expect = ["/c/big/huge.iso", "/c/video/movie.mkv"]
+source = "Forum: gigantic = over 128 MB"
+
+[[case]]
+query = "size:<10 file:"
+expect = ["/c/.hidden", "/c/a b.txt", "/c/bad\\xFF.bin", "/c/bin/link", "/c/deep/1/2/3/leaf.txt", "/c/docs/readme", "/c/docs/ΣΟΦΙΑ.txt", "/c/private/secret.key"]
+source = "Search Functions: size:<"
+
+[[case]]
+query = "size:1kb"
+expect = ["/c/docs/notes.txt"]
+source = "Search Functions: units are 1024-based"
+
+[[case]]
+query = "size:1.5kb"
+expect = []
+source = "Search Functions: fractional units"
+
+[[case]]
+query = "size:<=5kb ext:dat"
+expect = ["/c/big/tiny.dat"]
+source = "Search Functions: size:<="
