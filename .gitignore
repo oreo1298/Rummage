@@ -5,3 +5,4 @@
 /fuzz/artifacts
 *.fsidx
 *.fsidx.tmp*
+!/fuzz/seeds/**/*.fsidx

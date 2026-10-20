@@ -54,6 +54,13 @@ pub struct SearchContext<'a> {
     pub mime: Option<&'a dyn MimeDb>,
     /// Entries the caller may see (`None` = all). The daemon passes the peer’s visibility map.
     pub visible: Option<&'a Bitmap>,
+    /// Directories the caller may list (`None` = all). Child counts of other directories are
+    /// unknown to the caller: `childcount:` and `empty:` don’t match them.
+    pub listable: Option<&'a Bitmap>,
+    /// Treat the size of a folder that contains a restricted directory as unknown (for
+    /// unprivileged callers, so sizes of subtrees they can’t list don’t leak). Such folders
+    /// don’t match `size:`, never count as size duplicates, and sort last by size.
+    pub hide_restricted_sizes: bool,
     /// Set to cancel the search (checked per page).
     pub cancel: &'a AtomicBool,
     /// Largest file `content:` reads, in bytes.
@@ -75,6 +82,8 @@ impl<'a> SearchContext<'a> {
             content: None,
             mime: None,
             visible: None,
+            listable: None,
+            hide_restricted_sizes: false,
             cancel,
             content_limit: 256 << 20,
         }
@@ -201,6 +210,27 @@ pub fn count(
 
 /// Turns a hit bitmap into ids ordered by `sort`.
 fn sorted_ids(g: &Generation, hits: &Bitmap, sort: Sort, ctx: &SearchContext<'_>) -> Vec<EntryId> {
+    let mut ids = sorted_ids_inner(g, hits, sort, ctx);
+    hidden_sizes_last(g, &mut ids, sort, ctx);
+    ids
+}
+
+/// Hidden folder sizes sort last in both directions, keeping their relative order.
+fn hidden_sizes_last(g: &Generation, ids: &mut Vec<EntryId>, sort: Sort, ctx: &SearchContext<'_>) {
+    if sort.field == SortField::Size && ctx.hide_restricted_sizes {
+        let (mut shown, hidden): (Vec<EntryId>, Vec<EntryId>) =
+            ids.iter().partition(|&&id| !size_hidden(g, ctx, id));
+        shown.extend(hidden);
+        *ids = shown;
+    }
+}
+
+fn sorted_ids_inner(
+    g: &Generation,
+    hits: &Bitmap,
+    sort: Sort,
+    ctx: &SearchContext<'_>,
+) -> Vec<EntryId> {
     let n = hits.count();
     if let Some(kind) = sort.field.presorted()
         && n * 32 >= g.len().max(1)
@@ -223,12 +253,28 @@ fn sorted_ids(g: &Generation, hits: &Bitmap, sort: Sort, ctx: &SearchContext<'_>
             w &= w - 1;
         }
     }
-    sort_ids(g, &mut ids, sort, ctx);
+    sort_ids_raw(g, &mut ids, sort, ctx);
     ids
 }
 
-/// Sorts ids in place (used for small result sets and non-presorted columns).
-pub fn sort_ids(g: &Generation, ids: &mut [EntryId], sort: Sort, ctx: &SearchContext<'_>) {
+/// True if `id` is a folder whose size the caller must not see (see
+/// [`SearchContext::hide_restricted_sizes`]).
+#[must_use]
+pub fn size_hidden(g: &Generation, ctx: &SearchContext<'_>, id: EntryId) -> bool {
+    ctx.hide_restricted_sizes
+        && g.data
+            .dir_of(id.0)
+            .is_some_and(|d| g.data.dirs.restricted.get(d as usize) > 0)
+}
+
+/// Sorts ids in place (re-sorting an existing result list).
+pub fn sort_ids(g: &Generation, ids: &mut Vec<EntryId>, sort: Sort, ctx: &SearchContext<'_>) {
+    sort_ids_raw(g, ids, sort, ctx);
+    hidden_sizes_last(g, ids, sort, ctx);
+}
+
+/// Sorts ids in place by `sort` alone.
+fn sort_ids_raw(g: &Generation, ids: &mut [EntryId], sort: Sort, ctx: &SearchContext<'_>) {
     let nk = |id: EntryId| u64::from(g.data.name_key.get(id.index()));
     if let Some(kind) = sort.field.presorted() {
         sort_by_cached(ids, |id| g.order_key(kind, id));

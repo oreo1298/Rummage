@@ -16,6 +16,35 @@ fn sample(track_atime: bool) -> IndexWriter {
     let docs = w
         .insert(root, b"docs", &EntryMeta::dir(1_600_000_100))
         .unwrap();
+    use crate::perm::{AclEntry, tag};
+    let acl = [
+        AclEntry {
+            tag: tag::USER_OBJ,
+            perm: 7,
+            id: 0,
+        },
+        AclEntry {
+            tag: tag::USER,
+            perm: 5,
+            id: 4242,
+        },
+        AclEntry {
+            tag: tag::GROUP_OBJ,
+            perm: 5,
+            id: 0,
+        },
+        AclEntry {
+            tag: tag::MASK,
+            perm: 5,
+            id: 0,
+        },
+        AclEntry {
+            tag: tag::OTHER,
+            perm: 0,
+            id: 0,
+        },
+    ];
+    w.set_acl(docs, Some(&acl)).unwrap();
     for i in 0..9000u64 {
         let mut m = EntryMeta::file(i * 13, 1_600_000_000 + i as i64);
         m.uid = 1000 + (i % 3) as u32;
@@ -44,6 +73,8 @@ fn assert_same(a: &Generation, b: &Generation) {
         assert_eq!(a.size(id), b.size(id));
         assert_eq!(a.kind(id), b.kind(id));
         assert_eq!(a.owner(id), b.owner(id));
+        assert_eq!(a.acl(id), b.acl(id));
+        assert_eq!(a.flags(id), b.flags(id));
         for f in [
             TimeField::Modified,
             TimeField::Changed,
@@ -181,4 +212,72 @@ fn corrupt_section_values_are_rejected_without_panicking() {
         load_bytes(&bytes, Verify::All),
         Err(PersistError::Checksum(_))
     ));
+}
+
+#[test]
+fn acls_survive_snapshots() {
+    let w = sample(false);
+    let g = w.handle().load();
+    let docs = w.lookup(g.volumes()[0].root, b"docs").unwrap();
+    assert_eq!(g.acl(docs).map(<[_]>::len), Some(5));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acl.fsidx");
+    write(&g, &path).unwrap();
+    let snap = load(&path, Verify::All).unwrap();
+    assert_eq!(snap.generation.acl(docs), g.acl(docs));
+    // Clearing the ACL survives too, and restores the restricted count.
+    let mut w2 = IndexWriter::from_generation(&snap.generation, IndexConfig::default());
+    w2.set_acl(docs, None).unwrap();
+    let g2 = w2.publish();
+    w2.check_invariants().unwrap();
+    assert_eq!(g2.acl(docs), None);
+    assert_eq!(g2.restricted_count(docs), Some(0));
+    assert_eq!(g.restricted_count(docs), Some(1));
+}
+
+#[test]
+fn older_format_versions_are_incompatible() {
+    let g = sample(false).handle().load();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.fsidx");
+    write(&g, &path).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+    assert!(matches!(
+        load_bytes(&bytes, Verify::All),
+        Err(PersistError::Incompatible { found: 1 })
+    ));
+}
+
+/// Writes the fuzzing seed: `FOSSICK_SEED_OUT=path cargo test -p fossick-core write_fuzz_seed
+/// -- --ignored`.
+#[test]
+#[ignore = "writes a file for fuzzing"]
+fn write_fuzz_seed() {
+    let out = std::env::var("FOSSICK_SEED_OUT").expect("FOSSICK_SEED_OUT");
+    // Small (the fuzzer caps inputs at 400 KB) but touching every section kind.
+    let mut w = IndexWriter::new(IndexConfig { track_atime: true });
+    let (_, root) = w
+        .add_volume("seed", b"/s", "ext4", Some("Seed"), &EntryMeta::dir(1))
+        .unwrap();
+    let d = w.insert(root, b"d", &EntryMeta::dir(2)).unwrap();
+    for i in 0..200u64 {
+        let mut m = EntryMeta::file(i, i as i64);
+        m.uid = 1000 + (i % 3) as u32;
+        m.atime = Some(Timestamp::from_secs(7));
+        w.insert(d, format!("f{i}.txt").as_bytes(), &m).unwrap();
+    }
+    let mut big = EntryMeta::file(1 << 40, 3);
+    big.btime = Some(Timestamp::from_secs(-1000));
+    big.uid = 70_000;
+    w.insert(root, "größe\u{FF}.bin".as_bytes(), &big).unwrap();
+    w.insert(root, b"bad\xFFname", &EntryMeta::file(1, 1))
+        .unwrap();
+    let acl = [crate::perm::AclEntry {
+        tag: crate::perm::tag::USER,
+        perm: 5,
+        id: 4242,
+    }];
+    w.set_acl(d, Some(&acl)).unwrap();
+    write(&w.publish(), Path::new(&out)).unwrap();
 }

@@ -11,7 +11,9 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 fossick-core = { path = "../crates/core" }
+fossick-proto = { path = "../crates/proto" }
 jiff = "0.2"
+serde = "1"
 
 # Not part of the main workspace (needs nightly + cargo-fuzz).
 [workspace]
@@ -26,6 +28,13 @@ bench = false
 [[bin]]
 name = "snapshot_loader"
 path = "fuzz_targets/snapshot_loader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_decoder"
+path = "fuzz_targets/ipc_decoder.rs"
 test = false
 doc = false
 bench = false

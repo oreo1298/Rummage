@@ -249,105 +249,183 @@ predicate is monotone, only the previous result set is re-checked. Not implement
 searches at 5M entries take 30–90 ms on the 4-core development VM (see BENCHMARKS.md), so
 refinement is planned together with the daemon’s query sessions.
 
-## 4. Daemon (Phase 2)
+## 4. Daemon (`fossickd`, Phase 2)
 
-### 4.1 Mounts and volumes
+The daemon is a library (`crates/daemon/src/lib.rs`) plus a thin binary. Threads and channels,
+no async runtime:
 
-- `/proc/self/mountinfo` is parsed at startup and watched with `POLLPRI` for mounts, unmounts and
-  hotplug.
-- Filesystem types fall into four classes:
-  - **always excluded:** proc, sysfs, devtmpfs, devpts, cgroup, cgroup2, debugfs, tracefs,
-    securityfs, pstore, bpf, configfs, fusectl, mqueue, hugetlbfs, autofs, binfmt_misc, efivarfs,
-    nsfs;
-  - **local, indexed by default:** ext2/3/4, btrfs, xfs, f2fs, bcachefs, zfs, ntfs3, fuseblk/ntfs-3g,
-    exfat, vfat, hfsplus, iso9660, udf, jfs, overlayfs;
-  - **tmpfs:** opt-in;
-  - **network** (nfs, cifs/smb3, sshfs, 9p, ceph, davfs): opt-in per mount, kept current by polling.
-- Volume identity:
-  1. `/dev/disk/by-uuid`;
-  2. libblkid probe;
-  3. btrfs fsid + subvolume id;
-  4. for network filesystems: source + fstype;
-  5. otherwise mount point + fstype (volatile).
-- Bind mounts and subvolumes mounted more than once are deduplicated by (device, mountinfo root,
-  root inode). Snapshot directories (`.snapshots`, timeshift) are excluded unless enabled.
-- Offline volumes keep their index (configurable) and are shown greyed out.
+| Thread | Job |
+|---|---|
+| writer | owns the `IndexWriter`: mount sync, scans, event application, publishing, snapshots |
+| one reader per watched volume | blocks on fanotify or inotify, parses events, sends them to the writer |
+| mounts | `POLLPRI` on `/proc/self/mountinfo` → “mounts changed” |
+| accept + one reader and one executor per connection | the client protocol |
+| live | re-runs live queries after a publish, at most 10 times a second |
+| snapshot (short-lived) | writes a snapshot in the background |
 
-### 4.2 Scanner
+### 4.1 Mounts and volumes ✅
 
-- A work-stealing walk using raw `getdents64` and `statx` (`AT_SYMLINK_NOFOLLOW`,
-  `AT_STATX_DONT_SYNC`). Symlinks are indexed as entries, never followed.
-- It never crosses mount points (statx `STATX_MNT_ID`), but does follow nested btrfs subvolumes.
-- Threads per device come from `/sys/block/*/queue/rotational`: NVMe ≈ cores, HDD 1–2.
-- Scanner threads run at ioprio IDLE and nice 19, set per thread, so queries keep normal priority.
+- `/proc/self/mountinfo` is parsed at startup (octal escapes decoded) and watched with `POLLPRI`.
+- Mounts are classified:
+  - **excluded:** pseudo filesystems (proc, sysfs, devtmpfs, cgroup, …, gvfs/portal FUSE), and
+    anything mounted under `/proc`, `/sys`, `/dev`, `/run` (except `/run/media`), `/snap`,
+    `/var/lib/docker`, `/var/lib/containers`, `/var/snap`;
+  - **local** (watched live): ext2/3/4, xfs, btrfs, f2fs, vfat, exfat, ntfs3, fuseblk, jfs,
+    reiserfs, nilfs2, bcachefs, zfs, hfs(plus), apfs, ufs, an overlay mounted at `/`, and unknown
+    types backed by a block device;
+  - **static** (indexed once): iso9660, udf, squashfs, erofs, cramfs and read-only mounts;
+  - **memory** (tmpfs, ramfs): opt-in with `index_tmpfs`;
+  - **network** (nfs, cifs, smb3, 9p, ceph, sshfs, rclone, davfs, …): opt-in per mount point,
+    polled.
+- `volumes = [...]` limits indexing to listed mount points; `exclude = [...]` drops paths.
+- **Deduplication:** the same tree mounted twice (same device and mountinfo root) is indexed once,
+  at its shortest mount point. When one chosen mount’s root lies inside another’s on the same
+  device (a bind mount of a subdirectory, or a btrfs subvolume reachable from the top-level
+  mount), the deeper mount is the primary place for that subtree and is excluded from the other
+  mount’s scan. Snapshot directories are excluded unless `include_snapshots`.
+- **Identity** (matching a snapshot’s volumes to mounts): the filesystem UUID from
+  `/dev/disk/by-uuid` plus the btrfs subvolume id (or the bind root); for network filesystems,
+  type + source + root; otherwise type + mount point, marked volatile. A volume found at a new
+  mount point is moved (`IndexWriter::set_volume_mount`) instead of rescanned. libblkid probing is
+  not implemented (see TODO).
+- Unmounted volumes stay in the index, flagged offline (or are emptied with `keep_offline =
+  false`). Mount points of other indexed volumes are left out of their parent volume.
 
-### 4.3 Real-time updates
+### 4.2 Scanner ✅
 
-Each volume gets the best method that works on it, detected at runtime:
+- Work-stealing walk with raw `getdents64` + `statx` (`AT_SYMLINK_NOFOLLOW`, `AT_STATX_DONT_SYNC`,
+  `AT_NO_AUTOMOUNT`). Symlinks are entries, never followed. Mount points are recognised by
+  `stx_mnt_id` (so nested btrfs subvolumes are followed).
+- Per directory it can also read the POSIX access ACL (`fgetxattr` on the open directory),
+  record the file handle (`name_to_handle_at`, for fanotify), and call a hook before reading
+  (inotify adds its watch there).
+- Listings go to the writer parents-first through a bounded channel. Scanner threads run at idle
+  I/O priority and nice 19.
+- `scan_inline` runs the same per-directory code sequentially on the caller’s thread, for the
+  small directories that appear while watching.
+- Per-device thread counts from `queue/rotational` are not implemented; `scan_threads` sets the
+  count (default: all CPUs).
 
-1. **fanotify** (`FAN_MARK_FILESYSTEM` + `FAN_REPORT_DFID_NAME`, plus `FAN_REPORT_TARGET_FID` and
-   `FAN_RENAME` where the kernel has them);
-2. **inotify** (manages the watch budget, warns with instructions when `max_user_watches` is too
-   low, and covers only subtrees if the budget can’t cover the whole volume);
-3. **polling** (periodic pruned rescans);
-4. **static** (read-only media).
+### 4.3 Real-time updates ✅
 
-The per-volume method is reported over IPC and shown in the UI.
+Each volume gets the best method that works, detected at runtime and shown by
+`fossick --status`:
 
-- A dedicated reader thread drains events into the writer’s queue. Events caused by fossickd itself
-  are dropped by pid.
-- Events are coalesced into a dirty-directory set. Simple events apply directly; ambiguous ones
-  re-list the directory once per batch. Without `FAN_RENAME`, moved directories are held as
-  detached subtrees for a short window so a matching MOVED_TO can re-attach them.
-- `FAN_Q_OVERFLOW` or an unknown handle marks the volume dirty and triggers a pruned rescan.
+1. **fanotify**: one group per volume, `FAN_MARK_FILESYSTEM` with `FAN_REPORT_DFID_NAME`, plus
+   `FAN_RENAME` when the kernel accepts it (≥ 5.17). Needs `CAP_SYS_ADMIN`.
+2. **inotify**: one watch per directory, added *before* the directory is read (scanner hook), so
+   nothing created during a scan is missed. Watches are keyed by the directory’s (device, inode),
+   not by index entry, because the entry doesn’t exist yet when the watch is added. When
+   `max_user_watches` runs out, the volume switches to polling and the status says why.
+3. **polling**: pruned rescans every `poll_interval_secs`; every `poll_full_every`-th poll reads
+   everything, because changed file sizes and dates don’t touch directory timestamps.
+4. **static**: read-only media.
 
-### 4.4 Startup reconciliation
+Events say *where* something changed; the writer re-reads the filesystem to learn *what*:
 
-1. Load the snapshot and serve searches immediately.
-2. Rescan in the background. A directory whose mtime and ctime are unchanged, and older than the
-   filesystem’s timestamp granularity relative to the snapshot time, skips `getdents` but is still
-   descended.
-3. A separate low-priority pass refreshes file metadata.
+- `Child(dir, name)`: stat the entry and insert, update or remove it. A new directory is scanned
+  inline right away (it may already have contents).
+- `Itself(dir)` (fanotify reports changes to a directory itself with the name `.`): re-read its
+  mode, owner, times and ACL.
+- `Rename(from, to)`: if the entry at the new place has the indexed inode, rename it in the
+  index (keeping its subtree); otherwise refresh both ends.
 
-### 4.5 IPC
+**Renames racing with events.** An event can be read after its directory has been renamed on disk
+but before the rename event is applied, so the index’s path for the directory is stale. With
+fanotify the writer opens the event’s directory by its handle (`open_by_handle_at`, needs
+`CAP_DAC_READ_SEARCH`) and stats the entry relative to the real directory. Without a handle,
+a missing entry only counts as deleted if its directory still exists at the indexed path with the
+indexed inode; otherwise the event is retried after the batch’s renames, up to three times, then a
+pruned rescan settles it.
 
-- Socket: `/run/fossick/socket`, mode 0666. Authorization comes from `SO_PEERCRED` +
-  `SO_PEERGROUPS`.
-- Framing: little-endian `u32` length, then a postcard payload; frames are capped at 16 MiB.
-- Hello/HelloAck handshake with protocol version negotiation. New enum variants are only ever
-  appended.
-- Queries are cancellable and replace the connection’s previous query. Results are paged
-  (`GetRows{offset, count}`). The daemon pushes `ResultsChanged`, coalesced to ≤ 10 Hz.
-- Socket activation is used when `LISTEN_FDS` is set; otherwise the daemon binds the socket itself.
-  systemd is not required.
+**Hard links.** An event names one path, but every name of a file shares its size and dates.
+Files seen with more than one link are tracked per (volume, inode), and a change to one name is
+copied to the others (the first time, the volume’s inode column is searched for them).
 
-### 4.6 Permission filtering
+Events are applied in batches: the writer keeps draining its queue for up to 50 ms, then publishes.
+Events caused by the daemon itself (snapshot writes) are dropped by pid. `FAN_Q_OVERFLOW` or
+`IN_Q_OVERFLOW` triggers a pruned rescan. During a scan, events wait in the queue and are applied
+after it, re-reading the filesystem, so the result is current either way.
 
-- An entry is visible to a peer iff **every ancestor directory is listable (r+x)** by that peer,
-  judged from the stored mode, uid and gid plus the POSIX ACLs of directories. The chain crosses
-  mount points. Uncertain means deny. Root sees everything.
-- The filter applies to rows, counts, pushes, `dupe:`, `childcount:`, `parent:` and `content:`.
-  `content:` also needs read permission on the file itself.
-- Folder sizes are hidden from a non-root peer unless that peer can list the whole subtree.
-- A directory-visibility bitmap is cached per (credentials, generation).
+### 4.4 Startup reconciliation ✅
 
-### 4.7 systemd hardening
+1. The snapshot is loaded and served right away (`Verify::All`: 141 ms for 5M entries warm).
+2. Each volume gets a **pruned rescan**: a directory whose current mtime and ctime equal the
+   recorded ones (and are older than the snapshot minus 2 s, for coarse timestamps) is not read
+   again, but its known subdirectories are still visited.
+3. Then one full low-priority rescan per volume refreshes file sizes and dates
+   (`refresh_metadata`, on by default).
+
+A directory’s recorded times always describe *its own last complete listing*: they are taken
+just before the directory is read, and are not touched when its metadata changes through an event
+or through its parent’s listing. Otherwise a directory whose listing failed, or whose contents
+changed while events were being applied, could look current forever. A directory that disappears
+during a scan (renamed, say) yields an incomplete listing, never an empty one, so its indexed
+contents aren’t thrown away.
+
+### 4.5 IPC ✅
+
+- `fossick-proto`: postcard messages in frames of a little-endian `u32` length plus payload, 16 MiB
+  cap. `Hello` → `Welcome` handshake with the protocol version. Enum variants are only appended.
+  The decoder is fuzzed (`fuzz/fuzz_targets/ipc_decoder.rs`).
+- Requests: `Query` (replaces and cancels the connection’s previous query), `Cancel`,
+  `Rows{offset, count}` (≤ 10,000), `Sort`, `Status`, `ReportRun`, `Rescan` (root only), `Goodbye`.
+  Responses: `Result{total, generation, elapsed}`, `Rows`, `Changed` (live push), `Status`,
+  `Error`, `Ok`.
+- Each connection has a reader thread (which can cancel the running query) and an executor that
+  owns the result list. Live queries are re-run after publishes, at most 10 times a second, and
+  `Changed` is pushed only if the result changed. Incremental splicing of live results is not
+  implemented (see TODO).
+- Socket: `/run/fossick/socket`, mode 0666 (system) or `$XDG_RUNTIME_DIR/fossick/socket`, 0600
+  (user mode). systemd socket activation (`LISTEN_FDS`) is supported but not required.
+- `fossick-client` connects to the system daemon, else the user daemon, starting
+  `fossickd --user` in its own process group when needed. The CLI uses it whenever `--local` and
+  `--load` aren’t given.
+
+### 4.6 Permission filtering ✅
+
+- Credentials: `SO_PEERCRED` for uid and primary gid, `SO_PEERGROUPS` for supplementary groups.
+  Without `SO_PEERGROUPS` the peer gets no supplementary groups (fail closed).
+- An entry is visible iff **every directory from its volume root down to its parent is listable
+  (read and search)** by the peer, and every directory above the mount point is too (checked
+  live). Listability follows the kernel’s POSIX ACL algorithm (owner, named users, group class
+  with mask, other) using the stored mode, owner and directory ACLs. A directory whose ACL can’t
+  be parsed is listable by nobody but root. Root sees everything. In user mode only the daemon’s
+  own user may connect.
+- Visibility is computed per (credentials, generation) and cached (`core::perm::visibility`:
+  directories top-down, then entries in parallel). It is passed to the search as an entry mask
+  plus a “listable directories” mask.
+- What the filter covers: rows, totals, `Status` counts (per-user visible counts), `dupe:` and
+  `child:` (computed over visible entries only), `childcount:`/`empty:` (only for directories the
+  peer can list), folder sizes and `size:` on folders (hidden, and sorted last, when the folder
+  contains a restricted directory: one “others” can’t list, or one with an ACL), and `content:`,
+  which opens the file without following symlinks or blocking, then checks the peer’s read
+  permission (mode and ACL) on the opened file.
+- Tested with real users (`tests/integration/multiuser.sh`): each user’s results must equal what
+  `find` run as that user lists, before and after live permission changes.
+
+### 4.7 systemd hardening ✅ (verified in CI by `tests/integration/systemd.sh`)
 
 | Setting | Value |
 |---|---|
-| `User` | `fossick` |
+| `User` | `fossick` (sysusers.d) |
 | `AmbientCapabilities`, `CapabilityBoundingSet` | `CAP_SYS_ADMIN CAP_DAC_READ_SEARCH` |
-| `ProtectSystem` | `strict` |
-| `ProtectHome` | `read-only` |
-| `PrivateTmp` | `yes` |
+| `ProtectSystem` / `ProtectHome` / `PrivateTmp` | `strict` / `read-only` / `yes` |
 | `NoNewPrivileges` | `yes` |
-| `RestrictAddressFamilies` | `AF_UNIX` (+ `AF_INET`/`AF_INET6` through a drop-in only when the HTTP server is enabled) |
-| `SystemCallFilter` | `@system-service` + fanotify and handle syscalls |
-| `StateDirectory`, `RuntimeDirectory` | set |
-| `PrivateDevices` | not used: libblkid needs `/dev` |
+| `RestrictAddressFamilies` | `AF_UNIX` (the HTTP server of Phase 6 adds INET in a drop-in) |
+| `SystemCallFilter` | `@system-service` + fanotify and file-handle syscalls |
+| `StateDirectory`, `RuntimeDirectory` | `fossick` (0700, 0755) |
+| also | `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectProc=invisible`, `RestrictNamespaces`, `MemoryDenyWriteExecute`, `LockPersonality`, … |
+| `PrivateDevices` | not used: `/dev/disk/by-uuid` is read for volume identity |
 
-CI verifies that a loop device mounted after the service has started is indexed, i.e. mount
-propagation into the service’s namespace works.
+The CI test checks the running daemon’s user, effective capabilities and `NoNewPrivs`, that an
+unprivileged user’s results are filtered, and that a loop filesystem mounted after the service
+started is indexed and watched (mount propagation into the service’s namespace).
+
+### 4.8 Memory
+
+`fossickd` caps glibc malloc arenas at 2 (`mallopt(M_ARENA_MAX)`) and calls `malloc_trim` after
+startup scans; see BENCHMARKS.md for why.
 
 ## 5. Frontends (Phases 3 and 5)
 
@@ -388,13 +466,20 @@ propagation into the service’s namespace works.
 14. **Syntax reference:** voidtools.com was unreachable from the development sandbox. The syntax
     corpus was assembled from search-engine copies of the documentation plus known behaviour, and
     each case notes its source.
+15. **Folder sizes for unprivileged users** are hidden when the folder contains any directory
+    that “others” can’t list or that carries an ACL, even if this particular user could list it.
+    That is stricter than necessary, but it needs no per-user subtree computation and never leaks.
+16. **Volume identity without libblkid:** `/dev/disk/by-uuid` covers block devices with udev; the
+    libblkid fallback (containers without udev) isn’t implemented.
+17. **Scanner threads** are not chosen per device type yet (`queue/rotational`); one setting
+    applies to all volumes.
 
 ## 7. Phases
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Core (index, persistence, full query parser, matcher, sorting), in-process CLI, benchmark harness | ✅ |
-| 2 | Daemon: mounts, universal scanner, fanotify/inotify/polling, reconciliation, IPC, permission filtering, systemd unit, CLI over the socket, user mode | ⏳ |
+| 2 | Daemon: mounts, universal scanner, fanotify/inotify/polling, reconciliation, IPC, permission filtering, systemd unit, CLI over the socket, user mode | ✅ (C ABI deferred, see TODO) |
 | 3 | Qt/Kirigami GUI | ⏳ |
 | 4 | Packaging (Arch first, then deb, rpm, tarball), README, release CI | ⏳ |
 | 5 | GTK4/libadwaita GUI | ⏳ |

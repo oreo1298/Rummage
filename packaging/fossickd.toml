@@ -1,0 +1,51 @@
+# Fossick daemon configuration (/etc/fossick/fossickd.toml). Every key is optional; the values
+# below are the defaults.
+
+[index]
+# Only index the filesystems mounted at these paths (empty: every suitable mount).
+# volumes = ["/", "/home"]
+
+# Paths never indexed, with everything below them.
+# exclude = ["/var/lib/docker", "/home/alice/huge-dataset"]
+
+# Also index access times (refreshed by rescans only; enables da: and the date-accessed sort).
+track_atime = false
+
+# Index tmpfs and ramfs mounts. The daemon's own /tmp is private, so the host's /tmp is never
+# indexed in system mode.
+index_tmpfs = false
+
+# Network filesystems (nfs, cifs, sshfs, …) to index, by mount point. They are polled.
+# network = ["/mnt/nas"]
+
+# Index snapshot directories (.snapshots, timeshift); off because they duplicate everything.
+include_snapshots = false
+
+# Polling: seconds between rescans, and every Nth poll re-reads every directory to pick up
+# changed file sizes and dates.
+poll_interval_secs = 300
+poll_full_every = 6
+
+# Seconds between periodic snapshot writes (only when the index changed).
+snapshot_interval_secs = 600
+
+# Keep the entries of unmounted volumes, shown as offline.
+keep_offline = true
+
+# Scanner threads per volume (0 = number of CPUs).
+scan_threads = 0
+
+# After loading a snapshot, re-read everything once at low priority to refresh file sizes and
+# dates that changed while the daemon wasn't running.
+refresh_metadata = true
+
+# Largest file content: reads, in MiB.
+content_limit_mib = 256
+
+# How volumes are watched: "auto" (fanotify, else inotify, else polling), or force
+# "fanotify", "inotify" or "poll" for troubleshooting.
+watch_method = "auto"
+
+[server]
+# Socket path (default /run/fossick/socket; $XDG_RUNTIME_DIR/fossick/socket in user mode).
+# socket = "/run/fossick/socket"

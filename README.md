@@ -3,16 +3,19 @@
 Instant, Everything-style file-name search for Linux. Fossick indexes every file and folder name
 on every mounted filesystem, finds them as you type, and stays current in real time.
 
-> **Status: Phase 1 of 6 complete. Nothing is packaged yet.**
+> **Status: Phases 1–2 of 6 complete. Nothing is packaged yet.**
 >
 > What works today:
 >
 > - the search engine (index, Everything-compatible query language, sorting, snapshots);
-> - a command-line tool that indexes a directory in-process and searches it.
+> - the daemon `fossickd`: indexes every mounted filesystem, keeps the index current in real
+>   time (fanotify, inotify or polling), and filters every result by the asking user’s
+>   permissions;
+> - the `fossick` command-line client (through the daemon, or in-process with `--local`).
 >
-> The system daemon, real-time updates, GUIs and packages are planned. See
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design and plan, and
-> [`docs/TODO.md`](docs/TODO.md) for what is missing.
+> The GUIs and packages are planned. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the
+> design and plan, [`docs/TODO.md`](docs/TODO.md) for what is missing, and
+> [`docs/SECURITY.md`](docs/SECURITY.md) for the permission model.
 
 Fossick is an independent project, not affiliated with voidtools. It reimplements the behaviour
 and search syntax of voidtools Everything for Linux.
@@ -24,15 +27,47 @@ You need Rust 1.88 or newer (`rustup` or your distribution’s `rust` / `cargo` 
 ```sh
 git clone https://github.com/oreo1298/Rummage.git fossick && cd fossick
 cargo build --release
-./target/release/fossick --local ~ 'ext:pdf dm:thisyear'
-./target/release/fossick --local / --stats --count ''           # index the whole root filesystem
-./target/release/fossick --local /usr -n 10 --sort size --desc 'size:>100mb'
-./target/release/fossick --local ~ -0 '*.rs' | xargs -0 wc -l
 ```
 
-`--local DIR` scans `DIR` in-process (it never crosses into other mounts) and searches it. To reuse
-an index, save it with `--save FILE` and search it later with `--load FILE`. Searching without
-`--local` or `--load` needs the daemon (Phase 2); until then the CLI exits with status 3.
+### With the system daemon (indexes everything, filters per user)
+
+```sh
+sudo install -m 755 target/release/fossickd target/release/fossick /usr/local/bin/
+sudo install -m 644 packaging/systemd/fossick.sysusers /usr/lib/sysusers.d/fossick.conf
+sudo systemd-sysusers
+sed 's|/usr/bin/fossickd|/usr/local/bin/fossickd|' packaging/systemd/fossickd.service \
+  | sudo tee /etc/systemd/system/fossickd.service > /dev/null
+sudo cp packaging/systemd/fossickd.socket /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now fossickd.socket fossickd.service
+
+fossick --status                       # volumes and how each is kept current
+fossick 'ext:pdf dm:thisyear'
+fossick -n 10 --sort size --desc 'size:>100mb'
+fossick -0 '*.rs' | xargs -0 wc -l
+```
+
+The configuration file is `/etc/fossick/fossickd.toml` (all keys are optional; the documented
+defaults are in [`packaging/fossickd.toml`](packaging/fossickd.toml)). Without systemd, run
+`sudo fossickd` (it binds `/run/fossick/socket` itself).
+
+### Without root (user daemon)
+
+If no system daemon is running, `fossick` starts `fossickd --user`, which indexes your home
+directory only (with inotify) and keeps its index in `~/.cache/fossick`:
+
+```sh
+target/release/fossick 'report pdf'     # starts the user daemon on first use
+```
+
+### Without any daemon
+
+`--local DIR` scans `DIR` in-process (it never crosses into other mounts) and searches it.
+`--save FILE` keeps that index, and `--load FILE` searches it later:
+
+```sh
+target/release/fossick --local ~ 'ext:pdf dm:thisyear'
+target/release/fossick --local / --stats --count ''
+```
 
 ### Command-line options
 
@@ -51,7 +86,10 @@ an index, save it with `--save FILE` and search it later with `--load FILE`. Sea
 | `-l`, `--long` | size, date modified and path |
 | `--stats` | timings on stderr |
 | `--macro 'name=query'` | define a macro (repeatable) |
-| `--atime` | also index access times |
+| `--atime` | also index access times (`--local`) |
+| `--status` | show the daemon’s volumes, watch methods and entry counts |
+| `--rescan MOUNT` | ask the daemon to rescan a volume (root only) |
+| `--socket PATH`, `--user-daemon` | choose the daemon |
 
 Exit status:
 

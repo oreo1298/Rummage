@@ -1,0 +1,2 @@
+# Installed as /usr/lib/sysusers.d/fossick.conf
+u fossick - "Fossick file index" /var/lib/fossick /usr/sbin/nologin

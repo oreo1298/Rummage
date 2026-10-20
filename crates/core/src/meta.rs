@@ -137,6 +137,9 @@ pub struct EntryMeta {
     pub atime: Option<Timestamp>,
     pub inode: u64,
     pub attrs: Attrs,
+    /// Hard link count (0 = unknown). Not stored in the index; the daemon uses it to keep the
+    /// metadata of every name of a multiply linked file in step.
+    pub nlink: u32,
 }
 
 impl EntryMeta {

@@ -709,7 +709,15 @@ impl<'a> Engine<'a> {
                         name::extension(name).unwrap_or(b""),
                         &mut k,
                     ),
-                    DupeProp::Size => k.extend_from_slice(&d.size_of(id).to_le_bytes()),
+                    DupeProp::Size => {
+                        if super::size_hidden(self.g, self.ctx, EntryId(id)) {
+                            // Unknown sizes never match each other.
+                            k.extend_from_slice(b"hidden");
+                            k.extend_from_slice(&id.to_le_bytes());
+                        } else {
+                            k.extend_from_slice(&d.size_of(id).to_le_bytes());
+                        }
+                    }
                     DupeProp::Modified => k.extend_from_slice(
                         &d.time_secs(id, TimeField::Modified)
                             .unwrap_or(i64::MIN)
@@ -763,7 +771,10 @@ impl<'a> Engine<'a> {
                     exts.contains(&v)
                 }
             }
-            Pred::Size(r) => r.contains(i128::from(d.size_of(id))),
+            Pred::Size(r) => {
+                !super::size_hidden(self.g, self.ctx, EntryId(id))
+                    && r.contains(i128::from(d.size_of(id)))
+            }
             Pred::Time(field, r) => d
                 .time_secs(id, *field)
                 .is_some_and(|t| r.contains(i128::from(t))),
@@ -774,6 +785,9 @@ impl<'a> Engine<'a> {
                 let Some(dir) = d.dir_of(id) else {
                     return false;
                 };
+                if self.ctx.listable.is_some_and(|l| !l.get(id)) {
+                    return false;
+                }
                 let (f, fo) = (
                     d.dirs.files.get(dir as usize),
                     d.dirs.folders.get(dir as usize),
@@ -792,9 +806,12 @@ impl<'a> Engine<'a> {
             }
             Pred::Uid(r) => r.contains(i128::from(d.owner_of(id).0)),
             Pred::Gid(r) => r.contains(i128::from(d.owner_of(id).1)),
-            Pred::Empty => d.dir_of(id).is_some_and(|dir| {
-                d.dirs.files.get(dir as usize) + d.dirs.folders.get(dir as usize) == 0
-            }),
+            Pred::Empty => {
+                self.ctx.listable.is_none_or(|l| l.get(id))
+                    && d.dir_of(id).is_some_and(|dir| {
+                        d.dirs.files.get(dir as usize) + d.dirs.folders.get(dir as usize) == 0
+                    })
+            }
             Pred::Root => d.flags_of(id) & flags::VOLUME_ROOT != 0,
             Pred::Symlink => d.kind_of(id) == FileKind::Symlink,
             Pred::Hidden => d.flags_of(id) & flags::HIDDEN != 0,

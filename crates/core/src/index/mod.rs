@@ -160,6 +160,8 @@ pub(crate) struct SideTables {
     pub(crate) odd_time: Arc<HashMap<(u32, u8), i64>>,
     /// Owners that did not fit the owner table.
     pub(crate) odd_owner: Arc<HashMap<u32, (u32, u32)>>,
+    /// POSIX access ACLs of directories (entries flagged `HAS_ACL`).
+    pub(crate) acl: Arc<HashMap<u32, Arc<[crate::perm::AclEntry]>>>,
 }
 
 /// All column data of one index state. Cloning is cheap (page tables of `Arc`s).
@@ -723,6 +725,89 @@ impl Generation {
     #[must_use]
     pub fn order_key(&self, kind: OrderKind, id: EntryId) -> SortKey {
         order_key(&self.data, kind, id.0)
+    }
+
+    /// True if this generation stores access times.
+    #[must_use]
+    pub fn tracks_atime(&self) -> bool {
+        self.data.atime.is_some()
+    }
+
+    /// Number of live entries per volume (indexed by volume id), counting only entries set in
+    /// `mask` when one is given.
+    #[must_use]
+    pub fn volume_counts(&self, mask: Option<&crate::util::Bitmap>) -> Vec<u64> {
+        let mut counts = vec![0u64; self.data.volumes.len()];
+        for (page, &v) in self.data.page_volume.iter().enumerate() {
+            let n = match mask {
+                Some(m) => m
+                    .words()
+                    .get(page * PAGE_SIZE / 64..(page + 1) * PAGE_SIZE / 64)
+                    .map_or(0, |w| w.iter().map(|x| u64::from(x.count_ones())).sum()),
+                None => self
+                    .data
+                    .flags
+                    .page(page)
+                    .iter()
+                    .filter(|&&f| f & flags::FREE == 0)
+                    .count() as u64,
+            };
+            if let Some(c) = counts.get_mut(v as usize) {
+                *c += n;
+            }
+        }
+        counts
+    }
+
+    /// Finds the entry at an absolute path by binary search in the name order, then comparing
+    /// the full paths of the entries with that name. Prefer the writer’s lookups when available.
+    #[must_use]
+    pub fn lookup_path(&self, path: &[u8]) -> Option<EntryId> {
+        if let Some(v) = self
+            .data
+            .volumes
+            .iter()
+            .find(|v| v.mount_path == path && self.is_live(v.root))
+        {
+            return Some(v.root);
+        }
+        let name = path
+            .rsplit(|&b| b == b'/')
+            .next()
+            .filter(|n| !n.is_empty())?;
+        let order = self.orders.get(OrderKind::Name);
+        let (mut lo, mut hi) = (0, order.len());
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let id = order.get(mid)?;
+            if crate::fold::collate(self.data.name_of(id), name) == std::cmp::Ordering::Less {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo..order.len())
+            .map_while(|i| order.get(i).filter(|&id| self.data.name_of(id) == name))
+            .map(EntryId)
+            .find(|&id| self.path(id) == path)
+    }
+
+    /// A directory’s modification and change times in nanoseconds (directories keep full
+    /// precision so rescans can tell whether they changed).
+    #[must_use]
+    pub fn dir_times_ns(&self, id: EntryId) -> Option<(i64, i64)> {
+        let d = self.data.dir_of(id.0)? as usize;
+        let (m, c) = (
+            self.data.dirs.mtime_ns.get(d),
+            self.data.dirs.ctime_ns.get(d),
+        );
+        (m != i64::MIN && c != i64::MIN).then_some((m, c))
+    }
+
+    /// The access ACL of a directory, if it has one.
+    #[must_use]
+    pub fn acl(&self, id: EntryId) -> Option<&[crate::perm::AclEntry]> {
+        self.data.side.acl.get(&id.0).map(|a| &a[..])
     }
 }
 

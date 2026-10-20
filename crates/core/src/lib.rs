@@ -8,6 +8,7 @@ pub mod fold;
 pub mod index;
 pub mod meta;
 pub mod name;
+pub mod perm;
 pub mod persist;
 pub mod query;
 pub mod search;

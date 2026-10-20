@@ -460,3 +460,46 @@ mod model {
         }
     }
 }
+
+#[test]
+fn path_lookups_and_moving_volumes() {
+    let mut w = IndexWriter::new(IndexConfig::default());
+    let (vid, root) = w
+        .add_volume("usb", b"/media/old", "exfat", None, &EntryMeta::dir(1))
+        .unwrap();
+    let (_, sys) = w
+        .add_volume("sys", b"/", "ext4", None, &EntryMeta::dir(1))
+        .unwrap();
+    let media = w.insert(sys, b"media", &EntryMeta::dir(1)).unwrap();
+    let d = w.insert(root, b"Docs", &EntryMeta::dir(2)).unwrap();
+    let f = w.insert(d, b"a.txt", &EntryMeta::file(3, 3)).unwrap();
+    w.insert(d, b"A.txt", &EntryMeta::file(3, 3)).unwrap();
+    let g = w.publish();
+    assert_eq!(w.lookup_path(b"/media/old/Docs/a.txt"), Some(f));
+    assert_eq!(w.lookup_path(b"/media"), Some(media));
+    assert_eq!(w.lookup_path(b"/media/old"), Some(root));
+    assert_eq!(w.lookup_path(b"/media/old/nope"), None);
+    assert_eq!(g.lookup_path(b"/media/old/Docs/a.txt"), Some(f));
+    assert_eq!(g.lookup_path(b"/media/old"), Some(root));
+    assert_eq!(g.lookup_path(b"/media/old/Docs/a.TXT"), None);
+    assert_eq!(g.lookup_path(b"/"), Some(sys));
+    w.set_volume_mount(vid, b"/run/media/new").unwrap();
+    let g = w.publish();
+    w.check_invariants().unwrap();
+    assert_eq!(g.path(f), b"/run/media/new/Docs/a.txt");
+    assert_eq!(g.name(root), b"new");
+    assert_eq!(w.lookup_path(b"/run/media/new/Docs/a.txt"), Some(f));
+    assert_eq!(g.lookup_path(b"/run/media/new/Docs/a.txt"), Some(f));
+    assert_eq!(g.lookup_path(b"/media/old/Docs/a.txt"), None);
+    // The path order follows the move: /run/media/new sorts after /media.
+    let paths: Vec<Vec<u8>> = g
+        .orders()
+        .get(OrderKind::Path)
+        .iter()
+        .map(|id| g.path(EntryId(id)))
+        .collect();
+    assert_eq!(paths.len(), g.len());
+    let pos = |p: &[u8]| paths.iter().position(|x| x == p).unwrap();
+    assert!(pos(b"/media") < pos(b"/run/media/new"));
+    assert!(pos(b"/run/media/new") < pos(b"/run/media/new/Docs/a.txt"));
+}

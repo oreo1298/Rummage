@@ -1,0 +1,38 @@
+[package]
+name = "fossickd"
+description = "Fossick indexing daemon: keeps a live index of every file name and answers searches"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "fossickd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fossickd"
+path = "src/main.rs"
+
+[dependencies]
+fossick-core.workspace = true
+fossick-proto.workspace = true
+fossick-scan.workspace = true
+anyhow.workspace = true
+arc-swap.workspace = true
+clap.workspace = true
+jiff.workspace = true
+libc.workspace = true
+nix = { workspace = true, features = ["user", "signal", "fs"] }
+rustix = { workspace = true, features = ["net", "event", "fs", "process"] }
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

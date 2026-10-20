@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/scan", "crates/cli", "crates/bench"]
-default-members = ["crates/core", "crates/scan", "crates/cli"]
+members = ["crates/core", "crates/proto", "crates/scan", "crates/daemon", "crates/client", "crates/cli", "crates/bench"]
+default-members = ["crates/core", "crates/proto", "crates/scan", "crates/daemon", "crates/client", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,8 @@ authors = ["Fossick contributors"]
 [workspace.dependencies]
 fossick-core = { path = "crates/core", version = "0.1.0" }
 fossick-scan = { path = "crates/scan", version = "0.1.0" }
+fossick-proto = { path = "crates/proto", version = "0.1.0" }
+fossick-client = { path = "crates/client", version = "0.1.0" }
 
 aho-corasick = "1.1"
 anyhow = "1"
@@ -30,6 +32,7 @@ libc = "0.2"
 memchr = "2.7"
 memmap2 = "0.9"
 nix = { version = "0.31", default-features = false, features = ["user", "fs"] }
+postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 proptest = "1"
 rayon = "1.10"
 regex = "1.11"

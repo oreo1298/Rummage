@@ -11,11 +11,20 @@ cargo fmt --all --check                                   # formatting
 cargo clippy --workspace --all-targets -- -D warnings     # lint (must be clean)
 cargo test --workspace                                    # all tests
 cargo test -p fossick-core                                # core only
-cargo run -p fossick -- --local /usr 'ext:so size:>1mb'   # in-process CLI (Phase 1)
+cargo run -p fossick -- --local /usr 'ext:so size:>1mb'   # in-process CLI (no daemon)
 cargo bench -p fossick-bench                              # criterion benches (wall clock)
 cargo run -p fossick-bench --release --bin fossick-bench-report -- --entries 1000000
 cargo +nightly fuzz run query_parser                      # fuzzing (needs cargo-fuzz)
+# Daemon integration tests (root; loop filesystems, real users; see tests/integration/):
+cargo build --release -p fossickd -p fossick
+sudo tests/integration/storm.sh                           # FSTYPE=xfs WATCH=inotify|poll OPS=…
+sudo tests/integration/multiuser.sh                       # FSTYPE=…, WATCH=…
+sudo tests/integration/systemd.sh                         # needs systemd as PID 1 (CI)
 ```
+
+Crates: `core` (index, query, search, permissions, snapshots), `proto` (IPC messages), `scan`
+(walker, file handles, pruned rescans), `daemon` (`fossickd`), `client` (connect/autospawn),
+`cli` (`fossick`), `bench`.
 
 Rust: edition 2024, **MSRV 1.88** (raised from the planned 1.85 because ICU4X 2.x, used for
 Unicode case folding and normalization, needs 1.88). CI checks MSRV.

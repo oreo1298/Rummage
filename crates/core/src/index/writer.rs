@@ -206,9 +206,14 @@ fn entry_flags(name: &[u8], root: bool) -> u8 {
     f
 }
 
-/// A directory counts as restricted when “others” cannot list it.
+/// A directory counts as restricted when “others” cannot list it (by its mode bits).
 fn is_restricted(mode: u32) -> bool {
     mode & 0o005 != 0o005
+}
+
+/// Restricted by mode bits, or carrying an ACL (which may lock individual users out).
+fn self_restricted(mode: u32, entry_flags: u8) -> bool {
+    is_restricted(mode) || entry_flags & flags::HAS_ACL != 0
 }
 
 /// Evenly spreads `m` labels strictly between `lo` and `hi`, or `None` if they do not fit.
@@ -414,7 +419,58 @@ impl IndexWriter {
             atime: self.data.time_of(id.0, TimeField::Accessed),
             inode: self.data.inode.get(id.index()),
             attrs: crate::meta::Attrs(self.data.attrs.get(id.index())),
+            nlink: 0,
         })
+    }
+
+    /// A directory’s recorded modification and change times (ns), which rescans compare with
+    /// the filesystem to decide whether to read it again.
+    #[must_use]
+    pub fn dir_times(&self, id: EntryId) -> Option<(i64, i64)> {
+        let d = self.data.dir_of(id.0)? as usize;
+        let (m, c) = (
+            self.data.dirs.mtime_ns.get(d),
+            self.data.dirs.ctime_ns.get(d),
+        );
+        (m != i64::MIN && c != i64::MIN).then_some((m, c))
+    }
+
+    /// Records a directory’s modification and change times (`None`: unknown, so the next
+    /// pruned rescan reads it again). Scanners set them from the times observed just before
+    /// reading the directory, so they never claim more than the listing saw.
+    pub fn set_dir_times(
+        &mut self,
+        id: EntryId,
+        times: Option<(i64, i64)>,
+    ) -> Result<(), IndexError> {
+        let d = self.dir_record(id.0)? as usize;
+        let (m, c) = times.unwrap_or((i64::MIN, i64::MIN));
+        self.data.dirs.mtime_ns.set(d, m);
+        self.data.dirs.ctime_ns.set(d, c);
+        self.batch.touched.insert(id.0);
+        Ok(())
+    }
+
+    /// Live non-directory entries of `volume` with this inode number (all names of a hard
+    /// linked file). Scans the volume’s inode column, so use it sparingly.
+    #[must_use]
+    pub fn entries_with_inode(&self, volume: VolumeId, inode: u64) -> Vec<EntryId> {
+        let mut out = Vec::new();
+        for (page, &v) in self.data.page_volume.iter().enumerate() {
+            if v != volume.0 {
+                continue;
+            }
+            for (slot, &ino) in self.data.inode.page(page).iter().enumerate() {
+                if ino != inode {
+                    continue;
+                }
+                let id = u32::try_from(page * PAGE_SIZE + slot).unwrap_or(NONE);
+                if self.data.is_live(id) && !self.data.is_dir(id) {
+                    out.push(EntryId(id));
+                }
+            }
+        }
+        out
     }
 
     /// Finds the child of `dir` named `name`.
@@ -489,6 +545,63 @@ impl IndexWriter {
         self.write_new(id, NONE, &name, root_meta, true)?;
         Arc::make_mut(&mut self.data.volumes)[vid.0 as usize].root = EntryId(id);
         Ok((vid, EntryId(id)))
+    }
+
+    /// Moves a volume to a new mount path (a removable drive mounted somewhere else). Every
+    /// path in the volume changes, so its path order is rebuilt.
+    pub fn set_volume_mount(
+        &mut self,
+        volume: VolumeId,
+        mount_path: &[u8],
+    ) -> Result<(), IndexError> {
+        let v = volume.0 as usize;
+        let vol = self.data.volumes.get(v).ok_or(IndexError::NotFound)?;
+        if vol.mount_path == mount_path {
+            return Ok(());
+        }
+        let root = vol.root.0;
+        for e in self.subtree(root) {
+            self.mark_dirty(e, OrderKind::Name.bit() | OrderKind::Path.bit());
+            if let Some(d) = self.data.dir_of(e) {
+                self.batch.needs_dir_key.insert(d);
+            }
+        }
+        Arc::make_mut(&mut self.data.volumes)[v].mount_path = mount_path.to_vec();
+        let name: Vec<u8> = mount_path
+            .split(|&b| b == b'/')
+            .rfind(|c| !c.is_empty())
+            .unwrap_or_default()
+            .to_vec();
+        self.set_name(root, &name);
+        let keep = self.data.flags_of(root) & flags::HAS_ACL;
+        self.data
+            .flags
+            .set(root as usize, keep | entry_flags(&name, true));
+        self.batch.touched.insert(NONE);
+        Ok(())
+    }
+
+    /// Finds the entry at an absolute path, starting from the volume whose mount path is the
+    /// longest prefix of it.
+    #[must_use]
+    pub fn lookup_path(&self, path: &[u8]) -> Option<EntryId> {
+        let vol = self
+            .data
+            .volumes
+            .iter()
+            .filter(|v| {
+                let mp = v.mount_path.as_slice();
+                mp == b"/"
+                    || path == mp
+                    || (path.starts_with(mp) && path.get(mp.len()) == Some(&b'/'))
+            })
+            .max_by_key(|v| v.mount_path.len())?;
+        let rest = &path[vol.mount_path.len().min(path.len())..];
+        let mut cur = vol.root;
+        for comp in rest.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
+            cur = self.lookup(cur, comp)?;
+        }
+        self.is_live(cur).then_some(cur)
     }
 
     /// Marks a volume online or offline (offline volumes keep their entries).
@@ -856,8 +969,9 @@ impl IndexWriter {
         if was_dir {
             let d = self.data.dir_of(i).unwrap_or(0) as usize;
             let old_mode = u32::from(self.data.mode_of(i));
-            if is_restricted(old_mode) != is_restricted(meta.mode) {
-                let add = is_restricted(meta.mode);
+            let fl = self.data.flags_of(i);
+            if self_restricted(old_mode, fl) != self_restricted(meta.mode, fl) {
+                let add = self_restricted(meta.mode, fl);
                 let r = self.data.dirs.restricted.get(d);
                 self.data
                     .dirs
@@ -899,6 +1013,50 @@ impl IndexWriter {
         self.set_time(i, TimeField::Changed, meta.ctime);
         self.set_time(i, TimeField::Created, meta.btime);
         self.set_time(i, TimeField::Accessed, meta.atime);
+        Ok(())
+    }
+
+    /// Sets or clears the access ACL of a directory. ACLs of other entries aren’t stored: the
+    /// daemon checks file ACLs on the live filesystem when it needs them.
+    pub fn set_acl(
+        &mut self,
+        id: EntryId,
+        acl: Option<&[crate::perm::AclEntry]>,
+    ) -> Result<(), IndexError> {
+        let i = id.0;
+        let d = self.dir_record(i)? as usize;
+        let acl = acl.filter(|a| !a.is_empty());
+        if self.data.side.acl.get(&i).map(|a| &a[..]) == acl {
+            return Ok(());
+        }
+        let mode = u32::from(self.data.mode_of(i));
+        let old_flags = self.data.flags_of(i);
+        let new_flags = match acl {
+            Some(a) => {
+                Arc::make_mut(&mut self.data.side.acl).insert(i, a.into());
+                old_flags | flags::HAS_ACL
+            }
+            None => {
+                Arc::make_mut(&mut self.data.side.acl).remove(&i);
+                old_flags & !flags::HAS_ACL
+            }
+        };
+        self.data.flags.set(i as usize, new_flags);
+        let (was, now) = (
+            self_restricted(mode, old_flags),
+            self_restricted(mode, new_flags),
+        );
+        if was != now {
+            let r = self.data.dirs.restricted.get(d);
+            self.data
+                .dirs
+                .restricted
+                .set(d, if now { r + 1 } else { r.saturating_sub(1) });
+            if let Some(p) = self.data.parent_of(i) {
+                self.propagate(p, 0, 1, now);
+            }
+        }
+        self.batch.touched.insert(i);
         Ok(())
     }
 
@@ -957,6 +1115,9 @@ impl IndexWriter {
         }
         if self.data.side.odd_owner.contains_key(&e) {
             Arc::make_mut(&mut self.data.side.odd_owner).remove(&e);
+        }
+        if self.data.side.acl.contains_key(&e) {
+            Arc::make_mut(&mut self.data.side.acl).remove(&e);
         }
         for f in 0..4u8 {
             if self.data.side.odd_time.contains_key(&(e, f)) {
@@ -1044,8 +1205,12 @@ impl IndexWriter {
         self.detach(i);
         if name_changed {
             self.set_name(i, new_name);
-            let root = self.data.flags_of(i) & flags::VOLUME_ROOT != 0;
-            self.data.flags.set(i as usize, entry_flags(new_name, root));
+            let old_flags = self.data.flags_of(i);
+            let root = old_flags & flags::VOLUME_ROOT != 0;
+            let keep = old_flags & flags::HAS_ACL;
+            self.data
+                .flags
+                .set(i as usize, keep | entry_flags(new_name, root));
         }
         self.data.parent.set(i as usize, new_parent.0);
         self.attach(i);

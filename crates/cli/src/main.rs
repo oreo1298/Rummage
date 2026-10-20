@@ -1,8 +1,9 @@
 //! `fossick`: command-line search (the Everything `es.exe` equivalent).
 //!
-//! Phase 1 supports in-process searches (`--local DIR`, `--load SNAPSHOT`); searching through
-//! the system daemon arrives with the daemon.
+//! Searches go to the daemon (the system daemon, or the user’s own `fossickd --user`, started
+//! on demand). `--local DIR` and `--load SNAPSHOT` search in-process without a daemon.
 
+mod daemon;
 mod output;
 mod users;
 
@@ -39,9 +40,11 @@ mod exit {
     about = "Instant file name search (Everything syntax)",
     after_help = "EXIT STATUS: 0 = results found, 1 = no results, 2 = usage error, \
                   3 = daemon unavailable, 4 = invalid query, 5 = I/O error.\n\n\
-                  Examples:\n  fossick --local ~ 'ext:pdf dm:thisyear'\n  \
-                  fossick --local /usr -n 20 --sort size --desc 'size:>100mb'\n  \
-                  fossick --local . -0 '*.rs' | xargs -0 wc -l"
+                  Examples:\n  fossick 'ext:pdf dm:thisyear'\n  \
+                  fossick -n 20 --sort size --desc 'size:>100mb'\n  \
+                  fossick -0 '*.rs' | xargs -0 wc -l\n  \
+                  fossick --local ~/src 'TODO content:FIXME'\n  \
+                  fossick --status"
 )]
 struct Cli {
     /// Search query (Everything syntax). Multiple arguments are joined with spaces.
@@ -113,6 +116,19 @@ struct Cli {
     /// Define a macro, e.g. --macro 'media=audio:|video:' (repeatable).
     #[arg(long = "macro", value_name = "NAME=QUERY")]
     macros: Vec<String>,
+
+    /// Daemon socket to use (default: the system daemon, else your user daemon).
+    #[arg(long, value_name = "PATH")]
+    socket: Option<PathBuf>,
+    /// Use your own user daemon (`fossickd --user`, started if needed), not the system one.
+    #[arg(long, conflicts_with = "socket")]
+    user_daemon: bool,
+    /// Show the daemon’s volumes and how each is kept up to date.
+    #[arg(long, conflicts_with_all = ["local", "load"])]
+    status: bool,
+    /// Ask the daemon to rescan a volume by mount point ("" = all; root only).
+    #[arg(long, value_name = "MOUNT", conflicts_with_all = ["local", "load"])]
+    rescan: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -144,12 +160,7 @@ fn load_generation(cli: &Cli) -> Result<Arc<Generation>, Failure> {
         return Ok(Arc::new(snap.generation));
     }
     let Some(dir) = &cli.local else {
-        return Err((
-            exit::NO_DAEMON,
-            "the Fossick daemon is not available yet (it arrives in Phase 2); \
-             use --local DIR to search a directory in-process"
-                .into(),
-        ));
+        return Err((2, "--local or --load required".into()));
     };
     let dir = std::fs::canonicalize(dir)
         .map_err(|e| (exit::IO_ERROR, format!("{}: {e}", dir.display())))?;
@@ -196,6 +207,17 @@ fn load_generation(cli: &Cli) -> Result<Arc<Generation>, Failure> {
     Ok(g)
 }
 
+fn macros_of(cli: &Cli) -> Result<Vec<(String, String)>, Failure> {
+    cli.macros
+        .iter()
+        .map(|m| {
+            m.split_once('=')
+                .map(|(n, q)| (n.trim().to_owned(), q.to_owned()))
+                .ok_or_else(|| (2, format!("--macro expects NAME=QUERY, got {m:?}")))
+        })
+        .collect()
+}
+
 fn run(cli: &Cli) -> Result<u8, Failure> {
     let field = SortField::parse(&cli.sort)
         .ok_or_else(|| (2, format!("unknown sort field {:?}", cli.sort)))?;
@@ -203,6 +225,9 @@ fn run(cli: &Cli) -> Result<u8, Failure> {
         field,
         descending: cli.desc,
     };
+    if cli.local.is_none() && cli.load.is_none() {
+        return daemon::run(cli, sort);
+    }
     let generation = load_generation(cli)?;
     let options = SearchOptions {
         match_case: cli.case,
@@ -212,13 +237,9 @@ fn run(cli: &Cli) -> Result<u8, Failure> {
         match_diacritics: !cli.ignore_diacritics,
         ..SearchOptions::default()
     };
-    let mut macros = Macros::default();
-    for m in &cli.macros {
-        let (name, query) = m
-            .split_once('=')
-            .ok_or_else(|| (2, format!("--macro expects NAME=QUERY, got {m:?}")))?;
-        macros.user.insert(name.trim().to_owned(), query.to_owned());
-    }
+    let macros = Macros {
+        user: macros_of(cli)?.into_iter().collect(),
+    };
     let users = users::SystemUsers;
     let ctx = CompileContext {
         options,
@@ -258,26 +279,31 @@ fn run(cli: &Cli) -> Result<u8, Failure> {
             generation.len()
         );
     }
-    let ids = result
+    let rows = result
         .ids
         .iter()
         .skip(cli.offset)
-        .take(cli.limit.unwrap_or(usize::MAX));
-    let stdout = io::stdout();
-    let mut out = io::BufWriter::new(stdout.lock());
-    let written = if cli.json {
-        output::json(&mut out, &generation, ids)
-    } else {
-        output::plain(&mut out, &generation, ids, cli.null, cli.long)
-    };
-    match written.and_then(|()| out.flush()) {
-        Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
-        Err(e) => return Err((exit::IO_ERROR, e.to_string())),
-    }
+        .take(cli.limit.unwrap_or(usize::MAX))
+        .map(|&id| output::local_row(&generation, id));
+    write_rows(cli, rows)?;
     Ok(if result.ids.is_empty() {
         exit::NOT_FOUND
     } else {
         exit::FOUND
     })
+}
+
+fn write_rows(cli: &Cli, rows: impl Iterator<Item = fossick_proto::Row>) -> Result<(), Failure> {
+    let stdout = io::stdout();
+    let mut out = io::BufWriter::new(stdout.lock());
+    let written = if cli.json {
+        output::json(&mut out, rows)
+    } else {
+        output::plain(&mut out, rows, cli.null, cli.long)
+    };
+    match written.and_then(|()| out.flush()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err((exit::IO_ERROR, e.to_string())),
+    }
 }

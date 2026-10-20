@@ -12,6 +12,7 @@
 //! (`MAP_PRIVATE`, read-only) and builds a [`Generation`] whose column pages point straight into
 //! the mapping; pages are copied to owned memory only when the writer first modifies them.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -30,11 +31,12 @@ use crate::index::{
     DirStore, Generation, IndexData, Order, OrderKind, Orders, PAGE_SIZE, SideTables, SortKey,
     Volume,
 };
+use crate::perm::AclEntry;
 
 /// File magic.
 pub const MAGIC: [u8; 8] = *b"FOSSIDX\0";
 /// Current format version. Bump on any incompatible layout change and add a migration.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 const ENDIAN_MARK: u32 = 0x0102_0304;
 const ALIGN: u64 = 64;
 const HEADER_LEN: u64 = 128;
@@ -176,6 +178,7 @@ enum Kind {
     BigSize = 41,
     OddTime = 42,
     OddOwner = 43,
+    DirAcl = 44,
     OrderIds = 50,
     OrderBlocks = 51,
     OrderFences = 52,
@@ -192,6 +195,8 @@ const ESSENTIAL: &[Kind] = &[
     Kind::Size,
     Kind::Mode,
     Kind::Flags,
+    Kind::Owners,
+    Kind::DirAcl,
     Kind::OrderIds,
     Kind::OrderBlocks,
     Kind::OrderFences,
@@ -424,6 +429,20 @@ fn write_to(g: &Generation, tmp: &Path) -> Result<(), PersistError> {
         .collect();
     oo.sort_unstable_by_key(|o| o.id);
     w.section(Kind::OddOwner, 0, 12, [oo.as_bytes()])?;
+    // ACLs: [entry id, count, then count × (tag | perm << 16, qualifier)] per directory.
+    let mut acl_ids: Vec<u32> = d.side.acl.keys().copied().collect();
+    acl_ids.sort_unstable();
+    let mut acls: Vec<u32> = Vec::new();
+    for id in acl_ids {
+        let entries = &d.side.acl[&id];
+        acls.push(id);
+        acls.push(u32::try_from(entries.len()).unwrap_or(0));
+        for e in entries.iter() {
+            acls.push(u32::from(e.tag) | (u32::from(e.perm) << 16));
+            acls.push(e.id);
+        }
+    }
+    w.section(Kind::DirAcl, 0, 4, [acls.as_bytes()])?;
     for (i, kind) in OrderKind::ALL.into_iter().enumerate() {
         let order = g.orders.get(kind);
         let sub = u16::try_from(i).unwrap_or(0);
@@ -555,6 +574,38 @@ impl Sections<'_> {
             .map(<[T]>::to_vec)
             .map_err(|_| PersistError::Corrupt(format!("bad section {kind:?}")))
     }
+}
+
+/// Decodes the ACL section (see `write`).
+fn load_acls(words: &[u32]) -> Result<HashMap<u32, Arc<[AclEntry]>>, PersistError> {
+    let bad = || PersistError::Corrupt("bad ACL section".into());
+    let mut out = HashMap::new();
+    let mut i = 0;
+    while i < words.len() {
+        let (&id, &n) = (
+            words.get(i).ok_or_else(bad)?,
+            words.get(i + 1).ok_or_else(bad)?,
+        );
+        let n = n as usize;
+        let end = n
+            .checked_mul(2)
+            .and_then(|x| x.checked_add(i + 2))
+            .filter(|&e| e <= words.len())
+            .ok_or_else(bad)?;
+        let entries: Vec<AclEntry> = words[i + 2..end]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[tp, q]| AclEntry {
+                tag: (tp & 0xFFFF) as u16,
+                perm: (tp >> 16) as u16,
+                id: q,
+            })
+            .collect();
+        out.insert(id, entries.into());
+        i = end;
+    }
+    Ok(out)
 }
 
 fn mapped_column<T: Pod>(
@@ -708,6 +759,7 @@ fn from_mapping(map: Arc<Mapping>, verify: Verify) -> Result<Snapshot, PersistEr
     let big: Vec<DiskBigSize> = secs.vec(Kind::BigSize, 0)?;
     let odd: Vec<DiskOddTime> = secs.vec(Kind::OddTime, 0)?;
     let oo: Vec<DiskOwner> = secs.vec(Kind::OddOwner, 0)?;
+    let acl = load_acls(&secs.vec::<u32>(Kind::DirAcl, 0)?)?;
     let side = SideTables {
         big_size: Arc::new(big.iter().map(|b| (b.id, b.size)).collect()),
         odd_time: Arc::new(
@@ -716,6 +768,7 @@ fn from_mapping(map: Arc<Mapping>, verify: Verify) -> Result<Snapshot, PersistEr
                 .collect(),
         ),
         odd_owner: Arc::new(oo.iter().map(|o| (o.id, (o.uid, o.gid))).collect()),
+        acl: Arc::new(acl),
     };
     let data = IndexData {
         names,

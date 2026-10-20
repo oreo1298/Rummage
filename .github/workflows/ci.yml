@@ -81,6 +81,44 @@ jobs:
       - run: cargo install cargo-fuzz --locked
       - name: Fuzz each target for 60 s
         run: |
-          mkdir -p fuzz/corpus/query_parser fuzz/corpus/snapshot_loader
+          mkdir -p fuzz/corpus/query_parser fuzz/corpus/snapshot_loader fuzz/corpus/ipc_decoder
           cargo +nightly fuzz run query_parser fuzz/corpus/query_parser fuzz/seeds/query_parser -- -max_total_time=60
           cargo +nightly fuzz run snapshot_loader fuzz/corpus/snapshot_loader fuzz/seeds/snapshot_loader -- -max_len=400000 -max_total_time=60
+          cargo +nightly fuzz run ipc_decoder fuzz/corpus/ipc_decoder fuzz/seeds/ipc_decoder -- -max_total_time=60
+
+  # Daemon integration tests on loop-mounted filesystems: event storms (the index must equal a
+  # fresh walk) under fanotify and inotify, and multi-user permission filtering compared with
+  # `find` run as each user. GitHub's Ubuntu runners have passwordless sudo and loop devices.
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fs: [ext4, xfs, btrfs, f2fs, vfat, exfat, ntfs3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y acl xfsprogs btrfs-progs f2fs-tools dosfstools exfatprogs ntfs-3g
+          sudo modprobe ${{ matrix.fs }} || true
+          uname -r
+      - run: cargo build --release -p fossickd -p fossick
+      - name: Storm (default watcher)
+        run: sudo env FSTYPE=${{ matrix.fs }} OPS=8000 tests/integration/storm.sh
+      - name: Storm (inotify)
+        run: sudo env FSTYPE=${{ matrix.fs }} WATCH=inotify OPS=5000 tests/integration/storm.sh
+      - name: Multi-user visibility
+        if: contains(fromJSON('["ext4", "xfs", "btrfs", "f2fs"]'), matrix.fs)
+        run: sudo env FSTYPE=${{ matrix.fs }} tests/integration/multiuser.sh
+
+  # The packaged systemd units: hardening, privileges, filtering, hotplugged mounts.
+  systemd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p fossickd -p fossick
+      - run: sudo tests/integration/systemd.sh

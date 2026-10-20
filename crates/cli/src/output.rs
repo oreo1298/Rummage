@@ -7,6 +7,49 @@ use std::io::{self, Write};
 use fossick_core::meta::FileKind;
 use fossick_core::name::display_name;
 use fossick_core::{EntryId, Generation, TimeField};
+use fossick_proto::{Kind, Row};
+
+/// A result row built from a local generation (the daemon sends the same rows).
+pub fn local_row(g: &Generation, id: EntryId) -> Row {
+    let secs = |f| g.time(id, f).map(|t| t.secs);
+    let (uid, gid) = g.owner(id);
+    Row {
+        name: g.name(id).to_vec(),
+        parent: g.parent_path(id),
+        kind: match g.kind(id) {
+            FileKind::File => Kind::File,
+            FileKind::Dir => Kind::Folder,
+            FileKind::Symlink => Kind::Symlink,
+            _ => Kind::Other,
+        },
+        size: Some(g.size(id)),
+        modified: secs(TimeField::Modified),
+        created: secs(TimeField::Created),
+        accessed: secs(TimeField::Accessed),
+        changed: secs(TimeField::Changed),
+        mode: g.mode(id),
+        uid,
+        gid,
+        run_count: 0,
+        last_run: None,
+        offline: false,
+        name_highlights: Vec::new(),
+        path_highlights: Vec::new(),
+    }
+}
+
+/// The full path of a row.
+pub fn full_path(r: &Row) -> Vec<u8> {
+    let mut p = r.parent.clone();
+    if r.name.is_empty() {
+        return p;
+    }
+    if p.last() != Some(&b'/') {
+        p.push(b'/');
+    }
+    p.extend_from_slice(&r.name);
+    p
+}
 
 fn format_time(secs: i64) -> String {
     jiff::Timestamp::from_second(secs)
@@ -18,22 +61,19 @@ fn format_time(secs: i64) -> String {
         .unwrap_or_default()
 }
 
-pub fn plain<'a>(
+pub fn plain(
     out: &mut impl Write,
-    g: &Generation,
-    ids: impl Iterator<Item = &'a EntryId>,
+    rows: impl Iterator<Item = Row>,
     null: bool,
     long: bool,
 ) -> io::Result<()> {
-    for &id in ids {
+    for r in rows {
         if long {
-            let mtime = g
-                .time(id, TimeField::Modified)
-                .map(|t| format_time(t.secs))
-                .unwrap_or_default();
-            write!(out, "{:>14}\t{mtime:16}\t", g.size(id))?;
+            let mtime = r.modified.map(format_time).unwrap_or_default();
+            let size = r.size.map_or_else(|| "-".to_owned(), |s| s.to_string());
+            write!(out, "{size:>14}\t{mtime:16}\t")?;
         }
-        out.write_all(&g.path(id))?;
+        out.write_all(&full_path(&r))?;
         out.write_all(if null { b"\0" } else { b"\n" })?;
     }
     Ok(())
@@ -59,46 +99,38 @@ fn json_str(s: &str) -> String {
     out
 }
 
-fn kind_name(k: FileKind) -> &'static str {
+fn kind_name(k: Kind) -> &'static str {
     match k {
-        FileKind::File => "file",
-        FileKind::Dir => "folder",
-        FileKind::Symlink => "symlink",
-        FileKind::CharDevice => "char-device",
-        FileKind::BlockDevice => "block-device",
-        FileKind::Fifo => "fifo",
-        FileKind::Socket => "socket",
-        FileKind::Unknown => "unknown",
+        Kind::File => "file",
+        Kind::Folder => "folder",
+        Kind::Symlink => "symlink",
+        Kind::Other => "other",
     }
 }
 
-pub fn json<'a>(
-    out: &mut impl Write,
-    g: &Generation,
-    ids: impl Iterator<Item = &'a EntryId>,
-) -> io::Result<()> {
+pub fn json(out: &mut impl Write, rows: impl Iterator<Item = Row>) -> io::Result<()> {
     out.write_all(b"[")?;
-    for (i, &id) in ids.enumerate() {
+    for (i, r) in rows.enumerate() {
         if i > 0 {
             out.write_all(b",")?;
         }
-        let path = g.path(id);
+        let path = full_path(&r);
         let mut obj = String::with_capacity(128);
         let _ = write!(
             obj,
             "\n  {{\"name\": {}, \"path\": {}, \"type\": \"{}\", \"size\": {}",
-            json_str(&display_name(g.name(id))),
+            json_str(&display_name(&r.name)),
             json_str(&display_name(&path)),
-            kind_name(g.kind(id)),
-            g.size(id)
+            kind_name(r.kind),
+            r.size.map_or_else(|| "null".to_owned(), |s| s.to_string())
         );
-        for (key, field) in [
-            ("date_modified", TimeField::Modified),
-            ("date_created", TimeField::Created),
-        ] {
-            if let Some(t) = g.time(id, field) {
-                let _ = write!(obj, ", \"{key}\": {}", t.secs);
+        for (key, value) in [("date_modified", r.modified), ("date_created", r.created)] {
+            if let Some(t) = value {
+                let _ = write!(obj, ", \"{key}\": {t}");
             }
+        }
+        if r.offline {
+            obj.push_str(", \"offline\": true");
         }
         if std::str::from_utf8(&path).is_err() {
             obj.push_str(", \"path_hex\": \"");

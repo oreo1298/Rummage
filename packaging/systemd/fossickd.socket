@@ -1,0 +1,13 @@
+[Unit]
+Description=Fossick file name index (client socket)
+Documentation=https://github.com/oreo1298/Rummage/blob/main/README.md
+
+[Socket]
+ListenStream=/run/fossick/socket
+# Anyone may connect: every result is filtered by the peer's credentials (SO_PEERCRED).
+SocketMode=0666
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,4 @@
+# Installed as /usr/lib/tmpfiles.d/fossick.conf (for running fossickd outside the systemd unit,
+# which creates these itself).
+d /var/lib/fossick 0700 fossick fossick -
+d /run/fossick 0755 fossick fossick -

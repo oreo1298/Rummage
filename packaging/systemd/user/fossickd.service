@@ -1,0 +1,14 @@
+# Per-user daemon (indexes $HOME only). The client library also starts `fossickd --user` on
+# demand when no system daemon runs, so enabling this unit is optional.
+[Unit]
+Description=Fossick file name index (user mode)
+Documentation=https://github.com/oreo1298/Rummage/blob/main/README.md
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/fossickd --user
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
