@@ -948,7 +948,9 @@ impl Writer {
                                 )
                             },
                         );
-                        log::debug(&format!("event for unindexed directory {dev}:{ino}: {detail}"));
+                        log::debug(&format!(
+                            "event for unindexed directory {dev}:{ino}: {detail}"
+                        ));
                     }
                     Resolved::Pending
                 }
