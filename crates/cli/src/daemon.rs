@@ -128,9 +128,7 @@ pub fn run(cli: &Cli, sort: Sort) -> Result<u8, Failure> {
         return status(&mut client);
     }
     if let Some(m) = &cli.rescan {
-        client
-            .rescan(m.as_os_str().as_bytes())
-            .map_err(|e| fail(&e))?;
+        client.rescan(m.as_bytes()).map_err(|e| fail(&e))?;
         return Ok(exit::FOUND);
     }
     let req = QueryRequest {

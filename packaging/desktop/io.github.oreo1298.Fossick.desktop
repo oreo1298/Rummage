@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Fossick
+GenericName=File Search
+Comment=Find files and folders by name as you type
+Exec=fossick --gui
+Icon=io.github.oreo1298.Fossick
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=search;find;locate;files;folders;
+StartupNotify=true
+Actions=settings;
+
+[Desktop Action settings]
+Name=Settings
+Exec=fossick --gui --settings

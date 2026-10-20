@@ -32,7 +32,9 @@ FocusScope {
     }
     // Visual order of the model columns (TableView reports moves but has no getter).
     property var order: Columns.keys.map((k, i) => i)
-    onOrderChanged: table.forceLayout()
+    onOrderChanged: Qt.callLater(table.forceLayout)
+    // Column visibility can change in the settings window.
+    onSettingsChanged: Qt.callLater(table.forceLayout)
     property bool restored: false
 
     // Saves widths and the visual order of the columns.
@@ -62,7 +64,7 @@ FocusScope {
         if (!c || c.column === "name") return
         c.visible = visible
         root.saveSettings()
-        table.forceLayout()
+        Qt.callLater(table.forceLayout)
     }
 
     ColumnLayout {
@@ -131,7 +133,7 @@ FocusScope {
                     const others = visible.slice(0, -1).reduce((sum, l) => sum + widthOf(l), 0)
                     return Math.max(w, table.width - others)
                 }
-                onWidthChanged: forceLayout()
+                onWidthChanged: Qt.callLater(forceLayout)
                 onColumnsChanged: if (columns > 0) Qt.callLater(root.restoreOrder)
                 onColumnMoved: (logical, oldVisual, newVisual) => {
                     const o = root.order.slice()

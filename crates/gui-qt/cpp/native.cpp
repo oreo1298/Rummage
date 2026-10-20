@@ -46,7 +46,9 @@ void create_application(const QString& app_name, const QString& desktop_file, co
         QIcon::setFallbackThemeName(QStringLiteral("breeze"));
         QIcon::setThemeName(QStringLiteral("breeze"));
     }
-    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("system-search")));
+    // The installed icon, else the copy built into the program.
+    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("io.github.oreo1298.Fossick"),
+                                                 QIcon(QStringLiteral(":/fossick/fossick.svg"))));
 }
 
 int exec_application() {
@@ -119,14 +121,12 @@ void set_quit_on_last_window_closed(bool quit) {
 
 void schedule_screenshot(const QString& path, int delay_ms) {
     QTimer::singleShot(delay_ms, [path]() {
-        int code = 1;
+        // The window opened last (the settings window, when one was asked for).
+        QQuickWindow* shot = nullptr;
         for (QWindow* w : QGuiApplication::topLevelWindows()) {
-            if (auto* q = qobject_cast<QQuickWindow*>(w)) {
-                code = q->grabWindow().save(path) ? 0 : 1;
-                break;
-            }
+            if (auto* q = qobject_cast<QQuickWindow*>(w); q && q->isVisible()) shot = q;
         }
-        QCoreApplication::exit(code);
+        QCoreApplication::exit(shot && shot->grabWindow().save(path) ? 0 : 1);
     });
 }
 

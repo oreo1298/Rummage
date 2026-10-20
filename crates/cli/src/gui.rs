@@ -1,4 +1,4 @@
-//! `fossick --gui` and `fossick --toggle`: hand over to the running search window, or start the
+//! `fossick --gui`, `--toggle` and `--settings`: hand over to the running search window, or start the
 //! GUI that suits the desktop (`fossick-qt` on KDE Plasma and LXQt, `fossick-gtk` elsewhere,
 //! unless the settings choose).
 
@@ -27,10 +27,12 @@ fn find_exe(name: &str) -> Option<PathBuf> {
     })
 }
 
-pub fn run(text: &str, toggle: bool) -> Result<u8, Failure> {
+pub fn run(text: &str, toggle: bool, settings_window: bool) -> Result<u8, Failure> {
     let token = Command::token_from_env();
     let cmd = if toggle {
         Command::Toggle { token }
+    } else if settings_window {
+        Command::Settings { token }
     } else if text.is_empty() {
         Command::Activate { token }
     } else {
@@ -59,7 +61,9 @@ pub fn run(text: &str, toggle: bool) -> Result<u8, Failure> {
         )
     })?;
     let mut p = Process::new(&exe);
-    if !text.is_empty() {
+    if settings_window {
+        p.arg("--settings");
+    } else if !text.is_empty() {
         p.args(["--search", text]);
     }
     p.stdin(Stdio::null())

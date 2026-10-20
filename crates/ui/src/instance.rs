@@ -33,6 +33,10 @@ pub enum Command {
         text: String,
         token: String,
     },
+    /// Open the settings window.
+    Settings {
+        token: String,
+    },
 }
 
 impl Command {
@@ -77,6 +81,12 @@ impl Service {
             token: token.into(),
         });
     }
+
+    fn settings(&self, token: &str) {
+        (self.handler)(Command::Settings {
+            token: token.into(),
+        });
+    }
 }
 
 /// Keeps the D-Bus name while alive.
@@ -113,6 +123,9 @@ fn call(conn: &Connection, cmd: &Command) -> zbus::Result<()> {
         }
         Command::Search { text, token } => {
             conn.call_method(target.0, target.1, target.2, "Search", &(text, token))?
+        }
+        Command::Settings { token } => {
+            conn.call_method(target.0, target.1, target.2, "Settings", &(token,))?
         }
     };
     Ok(())

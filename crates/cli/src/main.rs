@@ -132,15 +132,26 @@ struct Cli {
     /// Show the daemon’s volumes and how each is kept up to date.
     #[arg(long, conflicts_with_all = ["local", "load"])]
     status: bool,
-    /// Ask the daemon to rescan a volume by mount point ("" = all; root only).
-    #[arg(long, value_name = "MOUNT", conflicts_with_all = ["local", "load"])]
-    rescan: Option<PathBuf>,
+    /// Ask the daemon to rescan a volume by mount point (no value or "" = all; root for the
+    /// system daemon).
+    #[arg(
+        long,
+        value_name = "MOUNT",
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = clap::builder::OsStringValueParser::new(),
+        conflicts_with_all = ["local", "load"]
+    )]
+    rescan: Option<std::ffi::OsString>,
     /// Open the search window (with the query, if any), or bring the running one forward.
     #[arg(long, conflicts_with_all = ["local", "load", "status", "rescan", "toggle"])]
     gui: bool,
     /// Show the search window, or hide it if it is in front (for a global shortcut).
     #[arg(long, conflicts_with_all = ["local", "load", "status", "rescan"])]
     toggle: bool,
+    /// Open the GUI’s settings window.
+    #[arg(long, conflicts_with_all = ["local", "load", "status", "rescan", "toggle"])]
+    settings: bool,
     /// Ask the daemon to re-read its configuration (root for the system daemon).
     #[arg(long, conflicts_with_all = ["local", "load", "status", "rescan", "gui", "toggle"])]
     reload: bool,
@@ -239,8 +250,8 @@ fn macros_of(cli: &Cli) -> Result<Vec<(String, String)>, Failure> {
 }
 
 fn run(cli: &Cli) -> Result<u8, Failure> {
-    if cli.gui || cli.toggle {
-        return gui::run(&cli.query.join(" "), cli.toggle);
+    if cli.gui || cli.toggle || cli.settings {
+        return gui::run(&cli.query.join(" "), cli.toggle, cli.settings);
     }
     if let Some(file) = &cli.install_config {
         return daemon::install_config(cli, file);

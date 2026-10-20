@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/fossick">
+    <file alias="fossick.svg">../../packaging/desktop/io.github.oreo1298.Fossick.svg</file>
+  </qresource>
+</RCC>

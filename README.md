@@ -88,7 +88,7 @@ target/release/fossick --local / --stats --count ''
 | `--macro 'name=query'` | define a macro (repeatable) |
 | `--atime` | also index access times (`--local`) |
 | `--status` | show the daemon’s volumes, watch methods and entry counts |
-| `--rescan MOUNT` | ask the daemon to rescan a volume (root only) |
+| `--rescan [MOUNT]` | ask the daemon to rescan a volume, or every volume without MOUNT (root for the system daemon) |
 | `--socket PATH`, `--user-daemon` | choose the daemon |
 
 Exit status:

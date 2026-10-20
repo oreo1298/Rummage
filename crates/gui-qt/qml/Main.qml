@@ -20,7 +20,7 @@ Kirigami.ApplicationWindow {
     function toggle(key) {
         settings[key] = !settings[key]
         saveSettings()
-        for (let i = 0; i < tabs.count; ++i) tabs.itemAt(i).run()
+        for (let i = 0; i < tabs.count; ++i) tabs.itemAt(i).refresh()
     }
     function newTab(text) {
         tabModel.append({ initial: text || "" })
@@ -137,6 +137,11 @@ Kirigami.ApplicationWindow {
         QQC2.MenuItem { text: qsTr("New Tab"); icon.name: "tab-new"; onTriggered: root.newTab() }
         QQC2.MenuItem { text: qsTr("New Window"); icon.name: "window-new"; onTriggered: root.newWindow() }
         QQC2.MenuSeparator {}
+        QQC2.MenuItem {
+            text: qsTr("Settings…"); icon.name: "configure"
+            onTriggered: Windows.showSettings()
+        }
+        QQC2.MenuSeparator {}
         QQC2.MenuItem { text: qsTr("Quit"); icon.name: "application-exit"; onTriggered: Qt.quit() }
     }
 
@@ -149,6 +154,7 @@ Kirigami.ApplicationWindow {
     Shortcut { sequences: [StandardKey.Close]; onActivated: root.closeTab(tabBar.currentIndex) }
     Shortcut { sequences: [StandardKey.New]; onActivated: root.newWindow() }
     Shortcut { sequences: [StandardKey.Quit]; onActivated: Qt.quit() }
+    Shortcut { sequences: [StandardKey.Preferences, "Ctrl+,"]; onActivated: Windows.showSettings() }
     Shortcut { sequence: "Ctrl+Tab"; onActivated: tabBar.currentIndex = (tabBar.currentIndex + 1) % tabModel.count }
     Shortcut {
         sequence: "Ctrl+Shift+Tab"

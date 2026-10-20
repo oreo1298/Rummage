@@ -27,8 +27,9 @@ fn main() {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "Usage: fossick-qt [--search TEXT] [--new-window] [--toggle]\n\n\
-             Opens the Fossick search window, or passes the request to the one already running."
+            "Usage: fossick-qt [--search TEXT] [--new-window] [--toggle] [--settings [PAGE]]\n\n\
+             Opens the Fossick search window, or passes the request to the one already running.\n\
+             --settings also opens the settings at PAGE (general, search, index or shortcut)."
         );
         return;
     }
@@ -39,6 +40,8 @@ fn main() {
         Command::NewWindow { token }
     } else if args.iter().any(|a| a == "--toggle") {
         Command::Toggle { token }
+    } else if args.iter().any(|a| a == "--settings") {
+        Command::Settings { token }
     } else {
         Command::Activate { token }
     };

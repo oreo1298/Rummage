@@ -27,9 +27,19 @@ FocusScope {
         if (!settings.show_hidden) q = (q + " !hidden:").trim()
         return q
     }
+    // What run() searched for last, to rerun only when settings change the search.
+    property string lastSearch: ""
+    function searchKey() {
+        return [searchField.text, filterQuery(), flags()].join("\n")
+    }
     function run() {
+        lastSearch = searchKey()
         results.search(searchField.text, filterQuery(), flags())
     }
+    function refresh() {
+        if (searchKey() !== lastSearch) run()
+    }
+    onSettingsChanged: refresh()
     function focusSearch() {
         searchField.forceActiveFocus()
         searchField.selectAll()

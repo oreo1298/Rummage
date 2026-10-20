@@ -7,6 +7,8 @@ fn main() {
         "qml/ResultsTable.qml",
         "qml/StatusBar.qml",
         "qml/PropertiesDialog.qml",
+        "qml/SettingsWindow.qml",
+        "qml/StringListEditor.qml",
     ]
     .into_iter()
     .map(QmlFile::from)
@@ -21,5 +23,6 @@ fn main() {
         .qt_module("QuickControls2")
         .files(["src/app.rs", "src/native.rs", "src/search.rs"])
         .cpp_file("cpp/native.cpp")
+        .qrc("resources.qrc")
         .build();
 }

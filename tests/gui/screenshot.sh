@@ -25,6 +25,10 @@ export FOSSICK_SOCKET="$XDG_RUNTIME_DIR/fossick/socket"
 echo "saved $OUT/empty-query.png"
 "$BIN/fossick-qt" --search report --screenshot "$OUT/query.png" 2500
 echo "saved $OUT/query.png"
+for page in general search index shortcut; do
+  "$BIN/fossick-qt" --settings "$page" --screenshot "$OUT/settings-$page.png" 2500
+  echo "saved $OUT/settings-$page.png"
+done
 
 # Single instance: a second launch passes its search to the running window (new tab).
 if command -v dbus-run-session > /dev/null; then

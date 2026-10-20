@@ -3,6 +3,7 @@
 //! actions and the choice of GUI.
 
 pub mod columns;
+pub mod daemon_config;
 pub mod desktop;
 pub mod filters;
 pub mod instance;
@@ -11,3 +12,4 @@ pub mod rows;
 pub mod selection;
 pub mod session;
 pub mod settings;
+pub mod shortcuts;

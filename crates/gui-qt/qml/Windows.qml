@@ -13,10 +13,15 @@ QtObject {
     property var last: null
     property bool initialTaken: false
     readonly property bool trayShown: tray.visible
+    property var settingsWindow: null
 
     function add(w) {
         list = list.concat([w])
         last = w
+        if (App.openSettings !== "" && list.length === 1) {
+            const pages = ["general", "search", "index", "shortcut"]
+            showSettings(Math.max(0, pages.indexOf(App.openSettings)))
+        }
     }
     function remove(w) {
         list = list.filter(x => x !== w)
@@ -47,6 +52,21 @@ QtObject {
         w.requestActivate()
         if (w.current) w.current.focusSearch()
     }
+    // The settings window, one for all windows.
+    function showSettings(page) {
+        if (!settingsWindow) {
+            const c = Qt.createComponent(Qt.resolvedUrl("SettingsWindow.qml"))
+            settingsWindow = c.createObject(null)
+            if (!settingsWindow) {
+                console.warn(c.errorString())
+                return
+            }
+        }
+        if (page !== undefined) settingsWindow.page = page
+        settingsWindow.show()
+        settingsWindow.raise()
+        settingsWindow.requestActivate()
+    }
     function toggle() {
         const w = last
         if (!w) {
@@ -62,7 +82,10 @@ QtObject {
         target: App
         function onCommandReceived(kind, text, token) {
             App.setActivationToken(token)
-            if (kind === "new-window" || !windows.last) {
+            if (kind === "settings") {
+                if (!windows.last) windows.create("")
+                windows.showSettings()
+            } else if (kind === "new-window" || !windows.last) {
                 windows.create(kind === "search" ? text : "")
             } else if (kind === "toggle") {
                 windows.toggle()
@@ -75,7 +98,8 @@ QtObject {
 
     property Platform.SystemTrayIcon tray: Platform.SystemTrayIcon {
         visible: JSON.parse(App.settingsJson).tray
-        icon.name: "system-search"
+        icon.name: "io.github.oreo1298.Fossick"
+        icon.source: "qrc:/fossick/fossick.svg"
         tooltip: "Fossick"
         onVisibleChanged: App.setQuitOnLastWindowClosed(!visible)
         Component.onCompleted: App.setQuitOnLastWindowClosed(!visible)

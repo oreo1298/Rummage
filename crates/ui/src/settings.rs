@@ -60,6 +60,11 @@ pub struct Settings {
     pub tray: bool,
     /// Closing the window hides it to the tray (when the tray icon is shown).
     pub close_to_tray: bool,
+    /// Register a global shortcut that shows or hides the window (GlobalShortcuts portal).
+    pub global_shortcut: bool,
+    /// The keys suggested to the desktop, in the shortcuts specification’s format
+    /// (`CTRL+ALT+space`); the desktop has the final say.
+    pub shortcut: String,
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -89,6 +94,8 @@ impl Default for Settings {
             frontend: Frontend::Auto,
             tray: false,
             close_to_tray: false,
+            global_shortcut: false,
+            shortcut: "CTRL+ALT+space".into(),
             window_width: 1100,
             window_height: 700,
         }
@@ -163,6 +170,17 @@ impl Settings {
                 c.visible = true;
             }
         }
+        // Custom filters need a name of their own.
+        let builtin = crate::filters::builtin();
+        let mut names: Vec<String> = builtin.into_iter().map(|f| f.name).collect();
+        self.custom_filters.retain_mut(|f| {
+            f.name = f.name.trim().to_owned();
+            f.query = f.query.trim().to_owned();
+            let keep = !f.name.is_empty() && !names.contains(&f.name);
+            names.push(f.name.clone());
+            keep
+        });
+        self.shortcut = self.shortcut.trim().to_owned();
         self.window_width = self.window_width.clamp(400, 10_000);
         self.window_height = self.window_height.clamp(300, 10_000);
     }
@@ -246,6 +264,22 @@ mod tests {
         assert!(s.columns[0].visible);
         assert_eq!(s.columns[0].width, 40);
         assert_eq!(s.filter_query(), "");
+        // Custom filters need unique, non-empty names.
+        std::fs::write(
+            &path,
+            "custom_filters = [{ name = \" Code \", query = \"ext:rs \" }, { name = \"Audio\", query = \"x\" },\
+             { name = \"\", query = \"y\" }, { name = \"Code\", query = \"z\" }]\nfilter = \"Code\"\n",
+        )
+        .unwrap();
+        let s = Settings::load_from(&path);
+        assert_eq!(
+            s.custom_filters,
+            vec![Filter {
+                name: "Code".into(),
+                query: "ext:rs".into()
+            }]
+        );
+        assert_eq!(s.filter_query(), "ext:rs");
         // Garbage gives the defaults.
         std::fs::write(&path, "columns = 7").unwrap();
         assert_eq!(Settings::load_from(&path), Settings::default());
