@@ -231,7 +231,7 @@ fn sorted_ids(g: &Generation, hits: &Bitmap, sort: Sort, ctx: &SearchContext<'_>
 pub fn sort_ids(g: &Generation, ids: &mut [EntryId], sort: Sort, ctx: &SearchContext<'_>) {
     let nk = |id: EntryId| u64::from(g.data.name_key.get(id.index()));
     if let Some(kind) = sort.field.presorted() {
-        ids.par_sort_unstable_by_key(|&id| (g.order_key(kind, id), id));
+        sort_by_cached(ids, |id| g.order_key(kind, id));
     } else {
         match sort.field {
             SortField::Extension => {
@@ -255,20 +255,16 @@ pub fn sort_ids(g: &Generation, ids: &mut [EntryId], sort: Sort, ctx: &SearchCon
                     SortField::Accessed => TimeField::Accessed,
                     _ => TimeField::Changed,
                 };
-                ids.par_sort_unstable_by_key(|&id| {
-                    (
-                        g.data.time_secs(id.0, field).unwrap_or(i64::MIN),
-                        nk(id),
-                        id,
-                    )
+                sort_by_cached(ids, |id| {
+                    (g.data.time_secs(id.0, field).unwrap_or(i64::MIN), nk(id))
                 });
             }
             SortField::RunCount => {
-                ids.par_sort_unstable_by_key(|&id| (ctx.runs.run_count(id), nk(id), id));
+                sort_by_cached(ids, |id| (ctx.runs.run_count(id), nk(id)));
             }
             SortField::DateRun => {
-                ids.par_sort_unstable_by_key(|&id| {
-                    (ctx.runs.last_run(id).unwrap_or(i64::MIN), nk(id), id)
+                sort_by_cached(ids, |id| {
+                    (ctx.runs.last_run(id).unwrap_or(i64::MIN), nk(id))
                 });
             }
             _ => {}
@@ -276,6 +272,16 @@ pub fn sort_ids(g: &Generation, ids: &mut [EntryId], sort: Sort, ctx: &SearchCon
     }
     if sort.descending {
         ids.reverse();
+    }
+}
+
+/// Sorts ids by `(key(id), id)`, computing each key once: looking keys up inside comparisons
+/// would touch scattered columns O(n log n) times.
+fn sort_by_cached<K: Ord + Send>(ids: &mut [EntryId], key: impl Fn(EntryId) -> K + Sync) {
+    let mut keyed: Vec<(K, EntryId)> = ids.par_iter().map(|&id| (key(id), id)).collect();
+    keyed.par_sort_unstable();
+    for (slot, (_, id)) in ids.iter_mut().zip(keyed) {
+        *slot = id;
     }
 }
 

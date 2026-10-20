@@ -351,6 +351,9 @@ fn text_matcher(
         .unwrap_or(ctx.options.wildcards_whole_name);
     if wildcards {
         let anchored = mods.whole_filename.unwrap_or(whole_name);
+        if !text.contains('?') {
+            return Ok(TextMatch::glob(text, anchored, case, diacritics, ascii));
+        }
         return TextMatch::regex(&wildcard_to_regex(text, anchored), case, diacritics)
             .map_err(QueryError::Regex);
     }
@@ -852,7 +855,10 @@ mod tests {
         assert!(matches!(c("foo").unwrap(), Pred::Name(_)));
         assert!(matches!(c("/usr/lib").unwrap(), Pred::Path(_)));
         assert!(matches!(c("path:foo").unwrap(), Pred::Path(_)));
-        assert!(matches!(c("*.txt").unwrap(), Pred::Name(m) if m.is_regex()));
+        assert!(
+            matches!(c("*.txt").unwrap(), Pred::Name(m) if matches!(m.mode, TextMode::Glob(_)))
+        );
+        assert!(matches!(c("*.tx?").unwrap(), Pred::Name(m) if m.is_regex()));
         assert!(matches!(c("size:>1gb").unwrap(), Pred::Size(_)));
         assert!(matches!(
             c("dm:today").unwrap(),

@@ -165,6 +165,9 @@ Estimated at 5 M entries with ~20-byte names. The measured figure is in `docs/BE
 | side tables, page slack, allocator | ~5 |
 | **total** | **≈ 93** (target < 120) |
 
+Measured at 5M entries (realistic tree): 78.4 B/entry in the published generation plus 27.4 B/entry
+writer-private, and 107 B/entry RSS growth with one malloc arena (see BENCHMARKS.md).
+
 ## 3. Query engine
 
 ### 3.1 Syntax
@@ -209,16 +212,32 @@ per page.
   per-page side arena of folded NFC names (only for the non-ASCII entries).
 - Diacritics-insensitive mode uses a second side arena (NFD, marks stripped, folded).
 - Bytes that aren’t valid UTF-8 match only themselves.
-- Case-sensitive mode is plain `memmem`. Whole-word, wildcard and regex leaves use `regex::bytes`,
-  which runs in linear time.
+- Case-sensitive mode is plain `memmem`.
+- Whole word, prefix (`startwith:`), suffix (`endwith:`) and exact (`wfn:`) leaves find their
+  needle in the raw arena the same way, then confirm the mode on each hit’s name.
+- **Wildcards.** A pattern with `*` but no `?` is split into literal pieces. Each piece is placed at
+  its leftmost occurrence after the previous one, which is exact for `*`-only patterns; with
+  whole-name matching, the first piece must be a prefix and the last a suffix. Pieces are
+  normalized like substrings, so wildcards honour case folding, the diacritics option and invalid
+  bytes, and the longest piece prefilters the arena. Patterns containing `?` compile to a
+  `regex::bytes` regex in which `*` spans any bytes (`?` is one valid character).
+- **Regex.** When a pattern’s anchors are all plain `^`/`$` (no `\A`, `\z`, `(?m)` or `(?-m)`), it
+  is compiled a second time with `^`/`$` bound to NUL. One search then covers a whole page arena,
+  and each hit’s name is re-checked on its own. Patterns with other anchors are matched per name.
+  The `regex` crate runs in linear time either way.
+- **`ext:`** compares the last `max_len + 1` bytes of each ASCII name against the extensions,
+  which are packed into sorted `u64`s. Non-ASCII names take the general per-entry check.
 
 **Path matching** (`path:`, or any term containing `/`): for substring needles, each directory
-memoizes a “path contains needle” flag and the last `len − 1` bytes of its path. That covers
-matches spanning the `/` boundary without building full paths. Regex and wildcard path matching
-build directory paths, cached per query.
+memoizes a “path contains needle” flag, a “path ends with the needle up to its last `/`” flag, and
+the last `len − 1` bytes of its path (from which its children’s flags are computed). A name holds
+no `/`, so an entry matches iff its directory’s path contains the needle, or the needle has no `/`
+and the name contains it (the arena scan above), or the directory’s second flag is set and the name
+starts with the rest of the needle. No full path is built. Regex and wildcard path matching build
+directory paths, cached per query.
 
 **Sorted output.** Let H be the number of hits and N the index size. When H < N/32, the hit ids are
-gathered and sorted by order key. Otherwise the requested presorted order is filtered against the
+gathered, their order keys computed once (in parallel), and the `(key, id)` pairs sorted. Otherwise the requested presorted order is filtered against the
 hit bitmap in parallel. Either way the result is a `Vec<u32>` in display order, and clients page
 through it.
 
@@ -226,8 +245,9 @@ through it.
 leaves on that row.
 
 **Refinement.** ⏳ If the new query string extends the previous one (search-as-you-type) and the
-predicate is monotone, only the previous result set is re-checked. Not implemented yet: full
-searches already meet the latency target on the development VM (see BENCHMARKS.md).
+predicate is monotone, only the previous result set is re-checked. Not implemented yet. Full
+searches at 5M entries take 30–90 ms on the 4-core development VM (see BENCHMARKS.md), so
+refinement is planned together with the daemon’s query sessions.
 
 ## 4. Daemon (Phase 2)
 

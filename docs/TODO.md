@@ -18,6 +18,14 @@ feature is not listed here and not marked ✅ in `docs/ARCHITECTURE.md`, treat i
   ~5 B/entry with a single vector and boxed buffers.
 - [ ] **`search::matches_one`** rebuilds global predicates (`child:`, `dupe:`) on every call. Live
   result updates in Phase 2 need an incremental path.
+- [ ] **`?` wildcards** still compile to a regex, where `?` is one valid UTF-8 character, so it
+  never matches a byte that isn’t valid UTF-8. `*`-only patterns don’t have this limit.
+- [ ] **Huge result sets:** queries with millions of hits (`a` at 5M: 61 ms p50 on the VM) spend
+  most of their time filtering the presorted order. The first visible window could be produced
+  before the full list.
+- [ ] **Scattered storms:** publishing 5,000 events spread over a 5M index takes ~210 ms on the VM
+  (96 MiB copied). Subtree-shaped storms take 85 ms. Reduce per-publish copying (name page
+  rebuilds, order blocks).
 - [ ] **Run history:** `runcount:`, `dr:` and the run-count sort are implemented. Without a run
   history (CLI local mode) counts are 0. Per-user history is stored by the daemon in Phase 2.
 

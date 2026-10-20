@@ -3,6 +3,7 @@
 
 use memchr::memmem;
 use regex::bytes::{Regex, RegexBuilder};
+use smallvec::SmallVec;
 
 use crate::fold;
 
@@ -14,8 +15,99 @@ pub enum TextMode {
     Suffix,
     Exact,
     WholeWord,
-    /// Regular expression (from `regex:` or translated wildcards).
+    /// Wildcards made of literals and `*` only, matched piece by piece.
+    Glob(Box<Glob>),
+    /// Regular expression (from `regex:` or wildcards containing `?`).
     Regex(Regex),
+}
+
+/// A wildcard pattern without `?`: literal pieces separated by `*`, normalized like haystacks.
+/// Matching places each piece at its leftmost occurrence after the previous one, which is exact
+/// for `*`-only patterns.
+#[derive(Clone, Debug)]
+pub struct Glob {
+    pieces: Vec<Vec<u8>>,
+    finders: Vec<memmem::Finder<'static>>,
+    /// Whole-name match: the first piece is a prefix and the last a suffix.
+    anchored: bool,
+}
+
+impl Glob {
+    fn new(pattern: &str, case: bool, diacritics: bool, ascii_only: bool, anchored: bool) -> Self {
+        let pieces: Vec<Vec<u8>> = pattern
+            .split('*')
+            .map(|p| {
+                let mut v = Vec::with_capacity(p.len());
+                normalize_into(p.as_bytes(), case, diacritics, ascii_only, &mut v);
+                v
+            })
+            .collect();
+        let finders = pieces
+            .iter()
+            .map(|p| memmem::Finder::new(p).into_owned())
+            .collect();
+        Self {
+            pieces,
+            finders,
+            anchored,
+        }
+    }
+
+    /// The longest piece (a substring every match contains).
+    fn longest(&self) -> &[u8] {
+        self.pieces
+            .iter()
+            .max_by_key(|p| p.len())
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// Matches a normalized haystack, reporting where each non-empty piece landed.
+    fn walk(&self, hay: &[u8], mut found: impl FnMut(usize, usize)) -> bool {
+        let n = self.pieces.len();
+        let (mut lo, mut hi) = (0, hay.len());
+        let mut middle = 0..n;
+        if self.anchored {
+            let (first, last) = (&self.pieces[0], &self.pieces[n - 1]);
+            // `split` always yields at least two pieces here: the pattern contains a `*`.
+            if n < 2
+                || hay.len() < first.len() + last.len()
+                || !hay.starts_with(first)
+                || !hay.ends_with(last)
+            {
+                return n < 2 && hay == first.as_slice();
+            }
+            lo = first.len();
+            hi = hay.len() - last.len();
+            middle = 1..n - 1;
+        }
+        let mut spans: SmallVec<[(usize, usize); 4]> = SmallVec::new();
+        for i in middle {
+            let p = &self.pieces[i];
+            if p.is_empty() {
+                continue;
+            }
+            match self.finders[i].find(&hay[lo..hi]) {
+                Some(at) => {
+                    spans.push((lo + at, lo + at + p.len()));
+                    lo += at + p.len();
+                }
+                None => return false,
+            }
+        }
+        if self.anchored {
+            let (first, last) = (&self.pieces[0], &self.pieces[n - 1]);
+            if !first.is_empty() {
+                found(0, first.len());
+            }
+            spans.iter().for_each(|&(s, e)| found(s, e));
+            if !last.is_empty() {
+                found(hay.len() - last.len(), hay.len());
+            }
+        } else {
+            spans.iter().for_each(|&(s, e)| found(s, e));
+        }
+        true
+    }
 }
 
 /// A compiled text matcher.
@@ -36,6 +128,9 @@ pub struct TextMatch {
     finder: memmem::Finder<'static>,
     /// ASCII case-insensitive searcher for raw arenas (case-insensitive ASCII needles only).
     ci: Option<aho_corasick::AhoCorasick>,
+    /// For regexes: the same pattern with `^`/`$` matching at NUL, for scanning a whole name
+    /// arena at once. `None` when the pattern has anchors that would behave differently there.
+    arena_re: Option<Regex>,
 }
 
 /// Translates Everything wildcards (`*`, `?`) into a regex pattern.
@@ -48,7 +143,8 @@ pub fn wildcard_to_regex(pattern: &str, anchored: bool) -> String {
     }
     for c in pattern.chars() {
         match c {
-            '*' => out.push_str(".*"),
+            // `*` spans any bytes, including ones that aren’t valid UTF-8.
+            '*' => out.push_str("(?-u:.)*"),
             '?' => out.push('.'),
             c => out.push_str(&regex::escape(c.encode_utf8(&mut [0u8; 4]))),
         }
@@ -71,6 +167,42 @@ impl TextMatch {
     ) -> Self {
         let mut needle = Vec::with_capacity(text.len());
         normalize_into(text.as_bytes(), case, diacritics, ascii_only, &mut needle);
+        Self::with_needle(text, needle, mode, case, diacritics, ascii_only)
+    }
+
+    /// A wildcard matcher for a pattern containing `*` but no `?`.
+    #[must_use]
+    pub fn glob(
+        pattern: &str,
+        anchored: bool,
+        case: bool,
+        diacritics: bool,
+        ascii_only: bool,
+    ) -> Self {
+        let glob = Glob::new(pattern, case, diacritics, ascii_only, anchored);
+        let needle = glob.longest().to_vec();
+        let all_ascii = glob.pieces.iter().all(|p| p.is_ascii());
+        let mut m = Self::with_needle(
+            pattern,
+            needle,
+            TextMode::Glob(Box::new(glob)),
+            case,
+            diacritics,
+            ascii_only,
+        );
+        // Every piece must be ASCII for an ASCII name to match.
+        m.needle_ascii = all_ascii;
+        m
+    }
+
+    fn with_needle(
+        text: &str,
+        needle: Vec<u8>,
+        mode: TextMode,
+        case: bool,
+        diacritics: bool,
+        ascii_only: bool,
+    ) -> Self {
         let needle_ascii = needle.is_ascii();
         let finder = memmem::Finder::new(&needle).into_owned();
         let ci = (!case && needle_ascii && !needle.is_empty())
@@ -91,6 +223,7 @@ impl TextMatch {
             needle_ascii,
             finder,
             ci,
+            arena_re: None,
         }
     }
 
@@ -115,7 +248,13 @@ impl TextMatch {
         let mut m = Self::literal("", TextMode::Substring, case, diacritics, false);
         m.mode = TextMode::Regex(re);
         m.raw = pattern.to_owned();
+        m.arena_re = arena_regex(pattern, case);
         Ok(m)
+    }
+
+    /// The arena variant of a regex (see `arena_re`).
+    pub(crate) fn arena_regex(&self) -> Option<&Regex> {
+        self.arena_re.as_ref()
     }
 
     #[must_use]
@@ -176,6 +315,7 @@ impl TextMatch {
             TextMode::Suffix => hay.ends_with(&self.needle),
             TextMode::Exact => hay == self.needle.as_slice(),
             TextMode::WholeWord => self.find_word(hay).is_some(),
+            TextMode::Glob(g) => g.walk(hay, |_, _| {}),
             TextMode::Regex(re) => re.is_match(hay),
         }
     }
@@ -239,6 +379,13 @@ impl TextMatch {
                     vec![]
                 }
             }
+            TextMode::Glob(ref g) => {
+                let mut v = Vec::new();
+                if !g.walk(&norm, |s, e| v.push((s, e))) {
+                    v.clear();
+                }
+                v
+            }
             _ => self
                 .finder
                 .find_iter(&norm)
@@ -281,6 +428,52 @@ impl TextMatch {
         }
         out
     }
+}
+
+/// Builds the arena variant of a user regex: `^` and `$` match next to the NUL separators of a
+/// name arena, so one search covers a whole page. Only patterns whose anchors all become line
+/// anchors qualify: `\A`, `\z`, `(?-m)` and an explicit `(?m)` (which anchors at `\n` in a
+/// single name) behave differently in an arena, so they keep per-name matching.
+fn arena_regex(pattern: &str, case: bool) -> Option<Regex> {
+    use regex_syntax::hir::{Hir, HirKind, Look};
+    fn looks(h: &Hir, out: &mut Vec<Look>) {
+        match h.kind() {
+            HirKind::Look(l) => out.push(*l),
+            HirKind::Repetition(r) => looks(&r.sub, out),
+            HirKind::Capture(c) => looks(&c.sub, out),
+            HirKind::Concat(v) | HirKind::Alternation(v) => v.iter().for_each(|x| looks(x, out)),
+            HirKind::Empty | HirKind::Literal(_) | HirKind::Class(_) => {}
+        }
+    }
+    let parse = |multi_line| {
+        regex_syntax::ParserBuilder::new()
+            .multi_line(multi_line)
+            .case_insensitive(!case)
+            .utf8(false)
+            .build()
+            .parse(pattern)
+            .ok()
+    };
+    let (mut as_lines, mut as_name) = (Vec::new(), Vec::new());
+    looks(&parse(true)?, &mut as_lines);
+    looks(&parse(false)?, &mut as_name);
+    let absolute = |l: &Look| matches!(l, Look::Start | Look::End);
+    let line = |l: &Look| {
+        matches!(
+            l,
+            Look::StartLF | Look::EndLF | Look::StartCRLF | Look::EndCRLF
+        )
+    };
+    if as_lines.iter().any(absolute) || as_name.iter().any(line) {
+        return None;
+    }
+    RegexBuilder::new(pattern)
+        .case_insensitive(!case)
+        .multi_line(true)
+        .line_terminator(0)
+        .size_limit(32 << 20)
+        .build()
+        .ok()
 }
 
 /// Normalizes `text`: optional case folding, NFC (or diacritics stripping) for non-ASCII.
@@ -378,6 +571,49 @@ mod tests {
         let m = TextMatch::regex(&wildcard_to_regex("re*rt", false), false, true).unwrap();
         assert!(m.is_match(b"my-report.pdf"));
         assert!(TextMatch::regex("(", false, true).is_err());
+    }
+
+    #[test]
+    fn globs() {
+        let g = |p: &str, anchored| TextMatch::glob(p, anchored, false, true, false);
+        let m = g("*.pdf", true);
+        assert!(m.is_match(b"Report.PDF") && !m.is_match(b"a.pdf.bak") && m.is_match(b".pdf"));
+        let m = g("re*rt*", true);
+        assert!(m.is_match(b"Report.txt") && !m.is_match(b"my-report"));
+        assert!(m.is_match(b"rert") && !m.is_match(b"ret"));
+        assert!(g("a*a", true).is_match(b"aa") && !g("a*a", true).is_match(b"a"));
+        assert!(g("*", true).is_match(b"") && g("*", true).matches_all());
+        let m = g("re*rt", false);
+        assert!(m.is_match(b"my-report.pdf") && !m.is_match(b"tr-er"));
+        let m = g("*CAFÉ*", true);
+        assert!(m.is_match("le café.txt".as_bytes()) && !m.is_match(b"cafe"));
+        let m = TextMatch::glob("*cafe*", true, false, false, false);
+        assert!(
+            m.is_match("Café".as_bytes()),
+            "diacritics-insensitive globs"
+        );
+        assert_eq!(g("*.pdf", true).highlight(b"a.PDF"), vec![(1, 5)]);
+        assert_eq!(
+            g("r*p*t", true).highlight(b"report"),
+            vec![(0, 1), (2, 3), (5, 6)]
+        );
+        assert!(g("*.pdf", true).highlight(b"a.txt").is_empty());
+    }
+
+    #[test]
+    fn arena_regexes() {
+        let has_arena = |p: &str| TextMatch::regex(p, false, true).unwrap().arena_re.is_some();
+        assert!(has_arena("^data_[0-9]+$"));
+        assert!(has_arena(r"\bfoo\b"));
+        assert!(!has_arena(r"\Adata"));
+        assert!(!has_arena(r"data\z"));
+        assert!(!has_arena("(?-m)^data"));
+        assert!(!has_arena("(?m)^data"));
+        let m = TextMatch::regex("^b.*c$", false, true).unwrap();
+        let re = m.arena_re.unwrap();
+        let arena = b"abc\0bxc\0b\0c\0";
+        let hits: Vec<usize> = re.find_iter(arena).map(|x| x.start()).collect();
+        assert_eq!(hits, vec![4]);
     }
 
     #[test]

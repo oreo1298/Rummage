@@ -60,10 +60,12 @@ fn test(b: &Bits, slot: usize) -> bool {
 }
 
 /// Per-directory memo for substring path matching: whether the directory’s path (with a
-/// trailing `/`) contains the needle, and the last `needle.len() - 1` bytes of it.
+/// trailing `/`) contains the needle, whether it ends with the needle up to and including the
+/// needle’s last `/`, and the last `needle.len() - 1` bytes of it.
 #[derive(Debug)]
 struct PathState {
     contains: bool,
+    suffix: bool,
     tail: SmallVec<[u8; 32]>,
 }
 
@@ -72,6 +74,62 @@ struct PathMemo {
     dirs: Vec<OnceLock<PathState>>,
     /// Full normalized directory paths (regex / wildcard matching only).
     full: Vec<OnceLock<Box<[u8]>>>,
+}
+
+/// The ASCII extensions of an `ext:` predicate, compared directly against name tails.
+/// Extensions of up to 8 bytes are packed into sorted `u64`s (lowercased unless `case`).
+struct ExtList {
+    packed: Vec<u64>,
+    long: Vec<Vec<u8>>,
+    max_len: usize,
+    case: bool,
+}
+
+impl ExtList {
+    fn new(exts: impl Iterator<Item = Vec<u8>>, case: bool) -> Self {
+        let mut list = Self {
+            packed: Vec::new(),
+            long: Vec::new(),
+            max_len: 0,
+            case,
+        };
+        for e in exts {
+            list.max_len = list.max_len.max(e.len());
+            match Self::pack(&e, case) {
+                Some(v) => list.packed.push(v),
+                None => list.long.push(e),
+            }
+        }
+        list.packed.sort_unstable();
+        list
+    }
+
+    /// Packs an extension of at most 8 bytes; names hold no NUL, so lengths can’t collide.
+    #[inline]
+    fn pack(ext: &[u8], case: bool) -> Option<u64> {
+        if ext.len() > 8 {
+            return None;
+        }
+        let mut b = [0u8; 8];
+        for (d, &c) in b.iter_mut().zip(ext) {
+            *d = if case { c } else { c.to_ascii_lowercase() };
+        }
+        Some(u64::from_le_bytes(b))
+    }
+
+    #[inline]
+    fn contains(&self, ext: &[u8]) -> bool {
+        match Self::pack(ext, self.case) {
+            Some(v) => self.packed.binary_search(&v).is_ok(),
+            None => self.long.iter().any(|e| {
+                if self.case {
+                    e.as_slice() == ext
+                } else {
+                    e.eq_ignore_ascii_case(ext)
+                }
+            }),
+        }
+    }
 }
 
 /// Evaluates predicates against one generation.
@@ -84,6 +142,9 @@ pub(crate) struct Engine<'a> {
     /// Parent-path predicates: matching directory entries, keyed by node address.
     parents: HashMap<usize, HashSet<u32>>,
     paths: HashMap<usize, PathMemo>,
+    /// `ext:` lists for the per-page fast path, keyed by node address. Missing: the predicate
+    /// needs the generic per-entry check.
+    exts: HashMap<usize, ExtList>,
 }
 
 fn key(p: &Pred) -> usize {
@@ -99,6 +160,7 @@ impl<'a> Engine<'a> {
             globals: HashMap::new(),
             parents: HashMap::new(),
             paths: HashMap::new(),
+            exts: HashMap::new(),
         };
         e.prepare(pred);
         e
@@ -144,13 +206,31 @@ impl<'a> Engine<'a> {
                 let set = self.dirs_with_path(path, *case);
                 self.parents.insert(key(p), set);
             }
-            Pred::Path(_) => {
+            Pred::Ext { exts, case } => {
+                // An empty extension matches names without one: that needs per-entry checks.
+                // An extension never contains a dot, so such entries can’t match; non-ASCII ones
+                // only match non-ASCII names, which take the per-entry check anyway.
+                if exts.iter().all(|e| !e.is_empty()) {
+                    let ascii = exts
+                        .iter()
+                        .filter(|e| e.is_ascii() && !e.contains(&b'.'))
+                        .cloned();
+                    self.exts.insert(key(p), ExtList::new(ascii, *case));
+                }
+            }
+            Pred::Path(m) => {
                 let n = self.d.dirs.capacity();
+                // Substring matching memoizes per-directory states, the others full paths.
+                let substring = matches!(m.mode, TextMode::Substring);
                 self.paths.insert(
                     key(p),
                     PathMemo {
-                        dirs: (0..n).map(|_| OnceLock::new()).collect(),
-                        full: (0..n).map(|_| OnceLock::new()).collect(),
+                        dirs: (0..if substring { n } else { 0 })
+                            .map(|_| OnceLock::new())
+                            .collect(),
+                        full: (0..if substring { 0 } else { n })
+                            .map(|_| OnceLock::new())
+                            .collect(),
                     },
                 );
             }
@@ -244,10 +324,14 @@ impl<'a> Engine<'a> {
             }
             Pred::Name(m) => self.eval_name(m, page, cand),
             Pred::Path(m) => {
-                let memo = self.paths.get(&key(p));
-                self.filter(page, cand, |id| {
-                    memo.is_some_and(|memo| self.path_match(m, memo, id))
-                })
+                let Some(memo) = self.paths.get(&key(p)) else {
+                    return [0; WORDS];
+                };
+                if matches!(m.mode, TextMode::Substring) {
+                    self.eval_path_substring(m, memo, page, cand)
+                } else {
+                    self.filter(page, cand, |id| self.path_match(m, memo, id))
+                }
             }
             Pred::Child(..) | Pred::Dupe(_) => {
                 let b = self.globals.get(&key(p));
@@ -258,6 +342,9 @@ impl<'a> Engine<'a> {
                 self.filter(page, cand, |id| {
                     set.is_some_and(|s| self.d.parent_of(id).is_some_and(|par| s.contains(&par)))
                 })
+            }
+            Pred::Ext { .. } if self.exts.contains_key(&key(p)) => {
+                self.eval_ext(p, &self.exts[&key(p)], page, cand)
             }
             Pred::Content(m) => self.filter(page, cand, |id| {
                 !self.ctx.cancel.load(AtomicOrdering::Relaxed)
@@ -293,27 +380,56 @@ impl<'a> Engine<'a> {
             }
             return out;
         }
-        // ASCII names.
-        let arena_scan =
-            matches!(m.mode, TextMode::Substring) && m.needle_ascii && popcount(cand) >= 256;
-        if arena_scan {
+        // ASCII names. A literal pattern that is non-ASCII after normalization can’t match them.
+        let regex = m.is_regex();
+        if regex || m.needle_ascii {
             let arena = names.arena();
             let offs = names.offsets();
-            let mut pos = 0;
-            while let Some(hit) = m.find_raw(arena, pos) {
-                // The slot whose name contains `hit` (NUL separators mean no cross-name hits).
-                let slot = offs
-                    .partition_point(|&o| (o as usize) <= hit)
-                    .saturating_sub(1);
-                if slot < PAGE_SIZE && test(cand, slot) && !non_ascii(slot) {
-                    set(&mut out, slot);
+            let slot_at = |pos: usize| {
+                offs.partition_point(|&o| (o as usize) <= pos)
+                    .saturating_sub(1)
+            };
+            let next = |slot: usize| offs.get(slot + 1).map_or(arena.len(), |&o| o as usize);
+            let dense = popcount(cand) >= 256;
+            if let (true, TextMode::Regex(re), Some(are)) = (dense, &m.mode, m.arena_regex()) {
+                // One regex search over the arena; hits are re-checked on their own name.
+                let mut pos = 0;
+                while pos < arena.len() {
+                    let Some(hit) = are.find_at(arena, pos) else {
+                        break;
+                    };
+                    let slot = slot_at(hit.start());
+                    if slot < PAGE_SIZE
+                        && test(cand, slot)
+                        && !non_ascii(slot)
+                        && re.is_match(names.name(slot))
+                    {
+                        set(&mut out, slot);
+                    }
+                    pos = next(slot);
                 }
-                pos = offs.get(slot + 1).map_or(arena.len(), |&o| o as usize);
-            }
-        } else {
-            for slot in slots(cand) {
-                if !non_ascii(slot) && m.is_match(names.name(slot)) {
-                    set(&mut out, slot);
+            } else if dense && !regex && !m.needle.is_empty() {
+                // Every match contains the (ASCII) needle: find it in the raw arena, then
+                // confirm modes that need more than containment.
+                let exact = matches!(m.mode, TextMode::Substring);
+                let mut pos = 0;
+                while let Some(hit) = m.find_raw(arena, pos) {
+                    // The slot whose name contains `hit` (NUL separators mean no cross-name hits).
+                    let slot = slot_at(hit);
+                    if slot < PAGE_SIZE
+                        && test(cand, slot)
+                        && !non_ascii(slot)
+                        && (exact || m.is_match(names.name(slot)))
+                    {
+                        set(&mut out, slot);
+                    }
+                    pos = next(slot);
+                }
+            } else {
+                for slot in slots(cand) {
+                    if !non_ascii(slot) && m.is_match(names.name(slot)) {
+                        set(&mut out, slot);
+                    }
                 }
             }
         }
@@ -330,6 +446,37 @@ impl<'a> Engine<'a> {
                 if test(cand, slot) && m.is_match_normalized(side.name(i)) {
                     set(&mut out, slot);
                 }
+            }
+        }
+        out
+    }
+
+    /// `ext:` for one page: ASCII names by looking at their last few bytes, others one by one.
+    fn eval_ext(&self, p: &Pred, list: &ExtList, page: usize, cand: &Bits) -> Bits {
+        let mut out = [0u64; WORDS];
+        let Some(names) = self.d.names.get(page) else {
+            return out;
+        };
+        let fl = self.d.flags.page(page);
+        for slot in slots(cand) {
+            let id = Self::id(page, slot);
+            if fl.get(slot).is_some_and(|f| f & flags::NON_ASCII != 0) {
+                if self.leaf(p, id) {
+                    set(&mut out, slot);
+                }
+                continue;
+            }
+            let name = names.name(slot);
+            // Only the last `max_len + 1` bytes can hold a matching `.ext`; the last dot there
+            // is the name’s last dot. A leading dot doesn’t start an extension.
+            let from = name.len().saturating_sub(list.max_len + 1);
+            let Some(dot) = memchr::memrchr(b'.', &name[from..]).map(|d| d + from) else {
+                continue;
+            };
+            let ext = &name[dot + 1..];
+            let hit = dot > 0 && list.contains(ext) && !self.d.is_dir(id);
+            if hit {
+                set(&mut out, slot);
             }
         }
         out
@@ -386,8 +533,17 @@ impl<'a> Engine<'a> {
                 }
                 buf.push(b'/');
                 let contains = inherited || m.is_match_normalized(&buf);
+                let suffix = m
+                    .needle
+                    .iter()
+                    .rposition(|&b| b == b'/')
+                    .is_some_and(|i| buf.ends_with(&m.needle[..=i]));
                 let tail = SmallVec::from_slice(&buf[buf.len().saturating_sub(keep)..]);
-                PathState { contains, tail }
+                PathState {
+                    contains,
+                    suffix,
+                    tail,
+                }
             });
         }
         memo.dirs
@@ -397,6 +553,7 @@ impl<'a> Engine<'a> {
                 static EMPTY: OnceLock<PathState> = OnceLock::new();
                 EMPTY.get_or_init(|| PathState {
                     contains: false,
+                    suffix: false,
                     tail: SmallVec::new(),
                 })
             })
@@ -415,6 +572,69 @@ impl<'a> Engine<'a> {
         })
     }
 
+    /// Substring path matching for one page. A name holds no `/`, so a match lies in the
+    /// directory part, in the name, or spans the final `/` with the needle’s last `/` on it.
+    fn eval_path_substring(
+        &self,
+        m: &TextMatch,
+        memo: &PathMemo,
+        page: usize,
+        cand: &Bits,
+    ) -> Bits {
+        let slash = m.needle.iter().rposition(|&b| b == b'/');
+        let mut out = match slash {
+            None => self.eval_name(m, page, cand),
+            Some(_) => [0; WORDS],
+        };
+        let mut rest = *cand;
+        for (r, o) in rest.iter_mut().zip(&out) {
+            *r &= !o;
+        }
+        // The part of the needle after its last `/`, which must start the name.
+        let after = slash.map(|i| &m.needle[i + 1..]);
+        let mut buf = Vec::new();
+        for slot in slots(&rest) {
+            let id = Self::id(page, slot);
+            let hit = match self.d.parent_of(id) {
+                // A volume root: its path is the mount path.
+                None => m.is_match(
+                    self.d
+                        .volume_of(id)
+                        .map_or(&b"/"[..], |v| &v.mount_path[..]),
+                ),
+                Some(parent) => {
+                    let st = self.dir_state(m, memo, parent);
+                    st.contains
+                        || (st.suffix
+                            && after.is_some_and(|b| {
+                                !b.is_empty() && self.name_starts_with(m, id, b, &mut buf)
+                            }))
+                }
+            };
+            if hit {
+                set(&mut out, slot);
+            }
+        }
+        out
+    }
+
+    /// True if the normalized name of `id` starts with `prefix`.
+    fn name_starts_with(&self, m: &TextMatch, id: u32, prefix: &[u8], buf: &mut Vec<u8>) -> bool {
+        let name = self.d.name_of(id);
+        if name.is_ascii() || m.ascii_only {
+            return if m.folds_case() {
+                name.get(..prefix.len())
+                    .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+            } else {
+                name.starts_with(prefix)
+            };
+        }
+        buf.clear();
+        Self::norm_name(m, name, buf);
+        buf.starts_with(prefix)
+    }
+
+    /// Path matching for regex and wildcard matchers, against the full normalized path.
     fn path_match(&self, m: &TextMatch, memo: &PathMemo, id: u32) -> bool {
         let Some(parent) = self.d.parent_of(id) else {
             // A volume root: its path is the mount path.
@@ -424,30 +644,14 @@ impl<'a> Engine<'a> {
                 .map_or(&b"/"[..], |v| &v.mount_path[..]);
             return m.is_match(mount);
         };
-        match &m.mode {
-            TextMode::Substring => {
-                let st = self.dir_state(m, memo, parent);
-                if st.contains {
-                    return true;
-                }
-                let mut buf: SmallVec<[u8; 128]> = SmallVec::new();
-                buf.extend_from_slice(&st.tail);
-                let mut name = Vec::new();
-                Self::norm_name(m, self.d.name_of(id), &mut name);
-                buf.extend_from_slice(&name);
-                m.is_match_normalized(&buf)
-            }
-            _ => {
-                let dir = self.full_dir_path(m, memo, parent);
-                let mut buf = Vec::with_capacity(dir.len() + 32);
-                buf.extend_from_slice(dir);
-                if buf.last() != Some(&b'/') {
-                    buf.push(b'/');
-                }
-                Self::norm_name(m, self.d.name_of(id), &mut buf);
-                m.is_match_normalized(&buf)
-            }
+        let dir = self.full_dir_path(m, memo, parent);
+        let mut buf = Vec::with_capacity(dir.len() + 32);
+        buf.extend_from_slice(dir);
+        if buf.last() != Some(&b'/') {
+            buf.push(b'/');
         }
+        Self::norm_name(m, self.d.name_of(id), &mut buf);
+        m.is_match_normalized(&buf)
     }
 
     fn dirs_with_path(&self, path: &[u8], case: bool) -> HashSet<u32> {

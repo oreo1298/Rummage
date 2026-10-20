@@ -5,6 +5,7 @@ use jiff::tz::TimeZone;
 use super::*;
 use crate::index::{IndexConfig, IndexWriter};
 use crate::meta::{EntryMeta, S_IFDIR, S_IFLNK, S_IFREG, Timestamp};
+use crate::query::compile::Pred;
 use crate::query::{Clock, CompileContext, Macros, NumericIds, SearchOptions, compile_str};
 
 /// /t
@@ -441,4 +442,197 @@ fn cancellation_and_visibility() {
     sc.visible = Some(&vis);
     let r = search(&g, &c, Sort::default(), &sc).unwrap();
     assert_eq!(r.ids, vec![some]);
+}
+
+/// A tree of a few thousand random names (dense pages, so the arena scans run), mixing case,
+/// accents in both normal forms, the Kelvin sign and invalid UTF-8.
+fn random_tree() -> Arc<Generation> {
+    const PIECES: &[&[u8]] = &[
+        b"a",
+        b"b",
+        b"A",
+        b"B",
+        b"x",
+        b".",
+        b" ",
+        b"_",
+        b"\xFF",
+        "é".as_bytes(),
+        "É".as_bytes(),
+        "e\u{301}".as_bytes(),
+        "\u{212A}".as_bytes(),
+        b"k",
+        b"re",
+        b"Re",
+    ];
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move |n: usize| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        usize::try_from(state >> 33).unwrap() % n
+    };
+    let mut w = IndexWriter::new(IndexConfig::default());
+    let dir = EntryMeta {
+        mode: S_IFDIR | 0o755,
+        ..EntryMeta::default()
+    };
+    let file = EntryMeta {
+        mode: S_IFREG | 0o644,
+        ..EntryMeta::default()
+    };
+    let (_, root) = w.add_volume("rand", b"/r", "ext4", None, &dir).unwrap();
+    let mut dirs = vec![root];
+    for _ in 0..4600 {
+        let mut name = Vec::new();
+        for _ in 0..=next(5) {
+            name.extend_from_slice(PIECES[next(PIECES.len())]);
+        }
+        let parent = dirs[next(dirs.len())];
+        let is_dir = next(6) == 0;
+        if let Ok(id) = w.insert(parent, &name, if is_dir { &dir } else { &file })
+            && is_dir
+        {
+            dirs.push(id);
+        }
+    }
+    w.publish()
+}
+
+/// The fast paths (arena scans, globs, path memos) agree with matching each name or full path
+/// on its own.
+#[test]
+fn fast_paths_match_per_entry_reference() {
+    let g = random_tree();
+    let queries = [
+        "a",
+        "ab",
+        "AB",
+        "re",
+        "é",
+        "É",
+        "e",
+        "k",
+        "K",
+        "a.b",
+        " ",
+        "x_",
+        "case:Re",
+        "case:é",
+        "nodiacritics:e",
+        "nodiacritics:É",
+        "ww:a",
+        "ww:re",
+        "startwith:re",
+        "endwith:.a",
+        "wfn:ab",
+        "*.a",
+        "*a*b*",
+        "re*",
+        "*é*",
+        "a*",
+        "*",
+        "*x?",
+        "wfn:a*b",
+        "nowfn:a*b",
+        "nodiacritics:*e*",
+        "case:*Re*",
+        "regex:^a",
+        "regex:b$",
+        r"regex:\bab",
+        "regex:a.b",
+        r"regex:\Aa",
+        "regex:(?m)^a",
+        "regex:[^a]+",
+        "regex:x*",
+        "regex:^$",
+        "path:a/",
+        "path:/a",
+        "a/b",
+        "path:é/",
+        "/",
+        "path:/r/",
+        "path:r/a",
+        "path:b/b/",
+        "path:a/re",
+        "path:K/",
+        "nodiacritics:path:e/",
+        "case:path:A/",
+        "path:*/a*",
+        "path:*é/*",
+        "regex:path:/a[^/]*$",
+        "path:ab",
+    ];
+    let ctx_opts = SearchOptions::default();
+    for query in queries {
+        let ctx = CompileContext {
+            options: ctx_opts,
+            clock: Clock::at(0, TimeZone::UTC),
+            macros: &Macros::default(),
+            users: &NumericIds,
+        };
+        let compiled = compile_str(query, &ctx).unwrap();
+        let cancel = AtomicBool::new(false);
+        let got = search(
+            &g,
+            &compiled,
+            Sort::default(),
+            &SearchContext::basic(&cancel),
+        )
+        .unwrap()
+        .ids;
+        let mut got: Vec<EntryId> = got;
+        got.sort_unstable();
+        let want: Vec<EntryId> = g
+            .iter()
+            .filter(|&id| match &compiled.pred {
+                Pred::Name(m) => m.is_match(g.name(id)),
+                Pred::Path(m) => m.is_match(&g.path(id)),
+                Pred::True => true,
+                other => panic!("{query}: unexpected predicate {other:?}"),
+            })
+            .collect();
+        assert_eq!(got.len(), want.len(), "{query}: result count");
+        assert_eq!(got, want, "{query}");
+    }
+    // `ext:` arena scans against the per-entry check (one candidate never takes the scan).
+    for query in [
+        "ext:a",
+        "ext:a;b;x",
+        "ext:A",
+        "case:ext:A",
+        "ext:é",
+        "ext:;a",
+        "ext:x.a",
+        "ext:k",
+        "ext:re;é",
+        "!ext:b",
+    ] {
+        let ctx = CompileContext {
+            options: ctx_opts,
+            clock: Clock::at(0, TimeZone::UTC),
+            macros: &Macros::default(),
+            users: &NumericIds,
+        };
+        let compiled = compile_str(query, &ctx).unwrap();
+        let cancel = AtomicBool::new(false);
+        let sctx = SearchContext::basic(&cancel);
+        let mut got = search(&g, &compiled, Sort::default(), &sctx).unwrap().ids;
+        got.sort_unstable();
+        let engine = eval::Engine::new(&g, &compiled.pred, &sctx);
+        let want: Vec<EntryId> = g
+            .iter()
+            .filter(|&id| {
+                let mut cand = [0u64; eval::WORDS];
+                cand[id.slot() / 64] |= 1 << (id.slot() % 64);
+                let r = engine.eval(&compiled.pred, id.page(), &cand);
+                r[id.slot() / 64] & (1 << (id.slot() % 64)) != 0
+            })
+            .collect();
+        assert!(
+            !want.is_empty() || query == "ext:x.a",
+            "{query}: no matches to compare"
+        );
+        assert_eq!(got, want, "{query}");
+    }
 }
