@@ -1,0 +1,28 @@
+[package]
+name = "fossick-qt"
+description = "Qt 6 / Kirigami frontend for Fossick"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "fossick-qt"
+path = "src/main.rs"
+
+[dependencies]
+cxx = "1"
+cxx-qt = "0.10"
+cxx-qt-lib = { version = "0.10", features = ["qt_gui", "qt_qml", "qt_quickcontrols"] }
+fossick-client.workspace = true
+fossick-proto.workspace = true
+fossick-ui.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cxx-qt-build = "0.10"
+
+[lints]
+workspace = true

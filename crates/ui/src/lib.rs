@@ -7,5 +7,6 @@ pub mod desktop;
 pub mod filters;
 pub mod launcher;
 pub mod rows;
+pub mod selection;
 pub mod session;
 pub mod settings;

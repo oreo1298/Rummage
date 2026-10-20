@@ -21,6 +21,8 @@ pub struct RowData {
     pub name_html: String,
     /// The containing folder.
     pub parent: String,
+    /// `parent` as HTML with the matched parts of a path search in `<b>`.
+    pub parent_html: String,
     /// The full path as HTML with the matched parts in `<b>` (for path searches).
     pub path_html: String,
     /// The full path, raw.
@@ -81,6 +83,14 @@ impl RowData {
         let path = full_path(&r.parent, &r.name);
         let name_html = highlighted(&r.name, &r.name_highlights);
         let path_html = highlighted(&path, &r.path_highlights);
+        let parent_len = u32::try_from(r.parent.len()).unwrap_or(u32::MAX);
+        let parent_marks: Vec<(u32, u32)> = r
+            .path_highlights
+            .iter()
+            .filter(|&&(s, _)| s < parent_len)
+            .map(|&(s, e)| (s, e.min(parent_len)))
+            .collect();
+        let parent_html = highlighted(&r.parent, &parent_marks);
         let extension = if r.kind == Kind::Folder {
             String::new()
         } else {
@@ -91,6 +101,7 @@ impl RowData {
             name: String::from_utf8_lossy(&r.name).into_owned(),
             name_html,
             parent: String::from_utf8_lossy(&r.parent).into_owned(),
+            parent_html,
             path_html,
             path,
             kind: r.kind,

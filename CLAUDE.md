@@ -8,8 +8,8 @@ Qt/GTK frontends). Repo: `github.com/oreo1298/Rummage` (the repo keeps its old n
 
 ```sh
 cargo fmt --all --check                                   # formatting
-cargo clippy --workspace --all-targets -- -D warnings     # lint (must be clean)
-cargo test --workspace                                    # all tests
+cargo clippy --workspace --exclude fossick-qt --all-targets -- -D warnings  # lint (clean)
+cargo test --workspace --exclude fossick-qt               # all tests but the Qt GUI
 cargo test -p fossick-core                                # core only
 cargo run -p fossick -- --local /usr 'ext:so size:>1mb'   # in-process CLI (no daemon)
 cargo bench -p fossick-bench                              # criterion benches (wall clock)
@@ -20,11 +20,21 @@ cargo build --release -p fossickd -p fossick
 sudo tests/integration/storm.sh                           # FSTYPE=xfs WATCH=inotify|poll OPS=…
 sudo tests/integration/multiuser.sh                       # FSTYPE=…, WATCH=…
 sudo tests/integration/systemd.sh                         # needs systemd as PID 1 (CI)
+# Qt GUI (needs Qt ≥ 6.8 + KF6 Kirigami, e.g. Ubuntu 26.04 / Debian 13 / Arch; CI job gui-qt):
+cargo clippy -p fossick-qt --all-targets -- -D warnings
+cargo build -p fossick-qt -p fossickd
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software XDG_CURRENT_DESKTOP=KDE \
+  tests/gui/screenshot.sh shots target/debug              # screenshots against a user daemon
 ```
+
+In this sandbox (Ubuntu 24.04, Qt 6.4) the Qt GUI is built in an Ubuntu 26.04 Docker image
+(`mirror.gcr.io/library/ubuntu:26.04` + the packages listed in the `gui-qt` CI job), with
+`~/.cargo` and `~/.rustup` mounted and `CARGO_TARGET_DIR=target/qt`.
 
 Crates: `core` (index, query, search, permissions, snapshots), `proto` (IPC messages), `scan`
 (walker, file handles, pruned rescans), `daemon` (`fossickd`), `client` (connect/autospawn),
-`cli` (`fossick`), `bench`.
+`cli` (`fossick`), `ui` (toolkit-free frontend logic: daemon session, row cache, selection,
+columns, settings, desktop actions), `gui-qt` (`fossick-qt`, cxx-qt + QML/Kirigami), `bench`.
 
 Rust: edition 2024, **MSRV 1.88** (raised from the planned 1.85 because ICU4X 2.x, used for
 Unicode case folding and normalization, needs 1.88). CI checks MSRV.
