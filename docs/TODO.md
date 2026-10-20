@@ -58,10 +58,13 @@ feature is not listed here and not marked ✅ in `docs/ARCHITECTURE.md`, treat i
 - [x] **Polkit** for admin requests: the GUI runs `fossick --install-config` / `--rescan` through
   `pkexec` (action `io.github.oreo1298.Fossick.admin`). The daemon still accepts them from root
   only.
-- [x] **btrfs + inotify:** CI runs 17 and 18 each lost a few files created right after a new
-  directory appeared. Two causes were fixed: a race between adding a watch and recording it,
-  and events of a stale watch being dropped (now they wait for a rescan). Green since CI run 25;
-  the storm test keeps its exact-path traces in case it comes back.
+- [ ] **btrfs + inotify:** CI runs 17, 18 and 26–28 each lost one file created in a brand-new
+  directory. Two earlier causes were fixed (a race between adding a watch and recording it, and
+  events of a stale watch being dropped). The remaining one: btrfs on recent kernels lists only
+  the entries that existed when a directory was *opened*, and the scanner opened the directory
+  before the inotify watch was added, so a file created in between was neither listed nor
+  reported. The scanner now reads through a second open made after the watch exists. Confirm over
+  several CI runs before ticking this.
 - [ ] **UUIDs without udev:** `FS_IOC_GETFSUUID` (Linux 6.5+) could identify volumes before udev
   publishes `/dev/disk/by-uuid`; until then the fallback identity is matched by mount point.
 - [ ] **Network filesystems** (polling) have no automated test yet.

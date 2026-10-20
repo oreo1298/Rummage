@@ -375,10 +375,21 @@ fn list_dir(shared: &Shared<'_>, job: DirJob) -> (Listing, Vec<Pending>) {
         times,
     } = job;
     shared.dirs.fetch_add(1, Ordering::Relaxed);
+    let fd = match &shared.opts.on_open {
+        Some(hook) => {
+            (hook.0)(&path, fd.as_fd());
+            // Read through a new open of the directory. btrfs (on recent kernels) lists only the
+            // entries that existed when a directory was opened, so an entry created between the
+            // open and the watch the hook just added would be in neither the listing nor an
+            // event.
+            let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+            openat(&fd, ".", flags | OFlags::NOATIME, Mode::empty())
+                .or_else(|_| openat(&fd, ".", flags, Mode::empty()))
+                .unwrap_or(fd)
+        }
+        None => fd,
+    };
     let fd = Arc::new(fd);
-    if let Some(hook) = &shared.opts.on_open {
-        (hook.0)(&path, fd.as_fd());
-    }
     let dev_ino = rustix::fs::fstat(&*fd)
         .ok()
         .map(|st| (st.st_dev, st.st_ino));

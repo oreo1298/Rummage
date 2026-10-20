@@ -25,7 +25,7 @@ entries compared after the restart and after the second storm. CI runs on GitHub
 |---|---|---|---|---|---|
 | ext4 | getdents64 + statx | fanotify (FID, `FAN_RENAME`) | inotify, polling | dev VM (6.18), CI (6.17) | storm ✅ fanotify (8k ops: 8.4 s, caught up 0.81 s; 33,028 / 33,200 entries), inotify ✅ (5k: 4.9 s, 0.84 s), polling ✅ (dev VM); multi-user ✅ |
 | xfs | getdents64 + statx | fanotify (FID, `FAN_RENAME`) | inotify | dev VM (6.18), CI (7.0) | storm ✅ fanotify (11.6 s, 1.53 s; 84,468 / 135,545), inotify ✅ (6.0 s, 1.55 s); multi-user ✅ |
-| btrfs | getdents64 + statx (nested subvolumes followed) | fanotify (FID, `FAN_RENAME`) | inotify | CI (6.17) | storm ✅ fanotify (13.9 s, 1.50 s; 88,184 / 136,207); inotify ⚠️ passes in most runs, but runs 17 and 18 each lost one or a few files created right after a new directory appeared (under investigation, `docs/TODO.md`); multi-user ✅ (run 15) |
+| btrfs | getdents64 + statx (nested subvolumes followed) | fanotify (FID, `FAN_RENAME`) | inotify | CI (6.17) | storm ✅ fanotify (13.9 s, 1.50 s; 88,184 / 136,207); inotify ⚠️ runs 17, 18 and 26–28 each lost the first file created in a new directory after the directory was opened for listing (btrfs lists only the entries that existed at open; fixed by reading through a second open, to be confirmed by further runs, see `docs/TODO.md`); multi-user ✅ (run 15) |
 | f2fs | getdents64 + statx | fanotify (FID, `FAN_RENAME`) | inotify | CI (6.17) | storm ✅ fanotify (8.7 s, 1.98 s; 84,803 / 112,769), inotify ✅ (3.8 s, 1.09 s); multi-user ✅ |
 | vfat | getdents64 + statx (always full rescans) | fanotify (FID) | inotify | CI (7.0) | storm ✅ fanotify (59 s of writing, caught up 2.5 s; 118,107 / 164,600), inotify ✅ (16.7 s, 1.48 s); multi-user n/a (no Unix permissions) |
 | exfat | getdents64 + statx (always full rescans) | **inotify** (no file handles, so no fanotify) | — | CI (7.0) | storm ✅ inotify (107 s of writing, caught up 4.0 s; 113,909 / 155,827); multi-user n/a |
@@ -63,7 +63,10 @@ CI rows come from the GitHub Actions `integration` (loop-device storms) and `sys
   `fs.inotify.max_user_watches`; when that runs out the volume is polled and `fossick --status`
   says so. Raise the limit with `sysctl fs.inotify.max_user_watches=1048576`.
 - **btrfs.** Nested subvolumes report their own `st_dev`. The scanner follows them inside a mount
-  (it compares mount ids) and leaves out subvolumes that are mounted separately.
+  (it compares mount ids) and leaves out subvolumes that are mounted separately. A directory read
+  lists only the entries that existed when the directory was opened, so with inotify the scanner
+  adds the watch first and then reads through a fresh open; otherwise an entry created in between
+  would be missed.
 - **FUSE filesystems mounted by another user without `allow_other`** are unreadable even to root,
   so the system daemon can’t index them. User mode can.
 - **Access times** are not tracked live (that would need an event for every read); they are
