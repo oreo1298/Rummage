@@ -358,8 +358,12 @@ dependencies = [
 name = "fossick-bench"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "clap",
  "fossick-core",
  "fossick-scan",
+ "libc",
+ "tempfile",
 ]
 
 [[package]]

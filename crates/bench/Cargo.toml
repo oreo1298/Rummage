@@ -9,9 +9,19 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[[bin]]
+name = "fossick-bench-report"
+path = "src/bin/report.rs"
+
 [dependencies]
 fossick-core.workspace = true
 fossick-scan.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
