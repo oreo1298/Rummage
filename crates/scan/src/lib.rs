@@ -124,6 +124,8 @@ pub struct Listing {
     pub times: Option<(i64, i64)>,
     /// The directory’s device and inode numbers (with an `on_open` hook).
     pub dev_ino: Option<(u64, u64)>,
+    /// Wall-clock time (ns) when the directory was read.
+    pub listed_at: i64,
 }
 
 /// Counters for one scan.
@@ -281,6 +283,18 @@ impl Shared<'_> {
 /// A directory’s (mtime, ctime) in nanoseconds.
 type Times = Option<(i64, i64)>;
 
+/// Directory times this close to the moment a directory was read are “racy”: the kernel stamps
+/// changes with a coarse clock, so an entry added in the same tick right after the read leaves
+/// the times unchanged. Such times are not recorded, so the next pruned rescan reads the
+/// directory again.
+const RACY_NS: i64 = 50_000_000;
+
+fn now_ns() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
+}
+
 /// A directory waiting to be scanned.
 struct DirJob {
     fd: OwnedFd,
@@ -383,6 +397,7 @@ fn list_dir(shared: &Shared<'_>, job: DirJob) -> (Listing, Vec<Pending>) {
         handle,
         times,
         dev_ino,
+        listed_at: now_ns(),
         ..Listing::default()
     };
     // Pruned rescan: an unchanged directory is not listed, only its known subdirectories.
@@ -816,7 +831,9 @@ impl Applier {
             let times = if listing.incomplete {
                 None
             } else {
-                listing.times
+                listing
+                    .times
+                    .filter(|&(m, c)| listing.listed_at.saturating_sub(m.max(c)) > RACY_NS)
             };
             let _ = w.set_dir_times(parent, times);
         }

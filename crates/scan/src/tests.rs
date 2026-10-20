@@ -217,8 +217,12 @@ fn pruned_rescan_lists_only_changed_directories() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     make_tree(root);
+    // Directories modified within the racy window of their listing are always read again;
+    // let the tree age past it.
+    std::thread::sleep(std::time::Duration::from_millis(120));
     let (mut w, stats) = build(root);
     let dirs = stats.dirs;
+    std::thread::sleep(std::time::Duration::from_millis(60));
     // Change two directories: a/y (new file) and b/z/deep (deleted file).
     fs::write(root.join("a/y/new"), b"").unwrap();
     fs::remove_file(root.join("b/z/deep/3")).unwrap();
@@ -342,4 +346,18 @@ fn inline_scan_matches_parallel_scan() {
     assert_eq!(indexed(&w, root), indexed(&w2, root));
     assert_eq!(order[0], 0, "the root comes first");
     assert_eq!(opened, stats.dirs);
+}
+
+#[test]
+fn racy_directory_times_are_not_trusted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_tree(root);
+    // Built right after the tree was made: every directory is racy, so a pruned rescan reads
+    // them all again.
+    let (mut w, stats) = build(root);
+    let g = w.handle().load();
+    let prior = IndexPrior::new(Arc::clone(&g), g.volumes()[0].root, i64::MAX);
+    assert_eq!(rescan(&mut w, root, Some(&prior)).unchanged_dirs, 0);
+    assert!(stats.dirs > 0);
 }

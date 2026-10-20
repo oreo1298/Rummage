@@ -653,6 +653,13 @@ impl Writer {
         let Some(vol) = self.vols.get(&vid) else {
             return;
         };
+        // FAT-family directory times can’t prove a directory unchanged: the root directory has
+        // none, and the rest have 2-second resolution. Every rescan there reads everything.
+        let kind = if prunable(&vol.plan.mount.fstype) {
+            kind
+        } else {
+            ScanKind::Full
+        };
         let path = vol.plan.mount.mount_path().to_path_buf();
         let Some(root) = self.w.volumes().get(vid.0 as usize).map(|v| v.root) else {
             return;
@@ -1276,6 +1283,12 @@ fn stop_watch(w: &Watch) {
         Watch::Inotify(i) => i.stop(),
         Watch::None | Watch::Poll => {}
     }
+}
+
+/// True if directory timestamps on this filesystem reliably change with the directory’s
+/// contents, so pruned rescans may skip directories whose times didn’t change.
+fn prunable(fstype: &str) -> bool {
+    !matches!(fstype, "vfat" | "msdos" | "exfat" | "fat")
 }
 
 /// User mode indexes the home directory only, as one volume.
