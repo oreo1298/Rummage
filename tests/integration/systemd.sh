@@ -83,4 +83,19 @@ touch /mnt/fossick-ci-hot/live-after-mount
 sleep 1
 "$FOSSICK" 'live-after-mount' | grep -q live-after-mount || die "no live updates on the hot mount"
 echo "ok: live updates on the hotplugged mount"
+
+note "configuration reload through systemctl and through pkexec-style --install-config"
+mkdir -p /srv/fossick-ci/public/node_modules
+touch /srv/fossick-ci/public/node_modules/dep.js
+for _ in $(seq 1 50); do "$FOSSICK" dep.js | grep -q dep.js && break; sleep 0.1; done
+cp /etc/fossick/fossickd.toml /var/tmp/fossick-ci.toml
+sed -i '/^\[index\]/a exclude_names = ["node_modules"]' /var/tmp/fossick-ci.toml
+"$FOSSICK" --install-config /var/tmp/fossick-ci.toml
+for _ in $(seq 1 50); do "$FOSSICK" dep.js | grep -q dep.js || break; sleep 0.1; done
+"$FOSSICK" dep.js | grep -q dep.js && die "exclude_names did not apply after --install-config"
+sed -i '/^exclude_names/d' /etc/fossick/fossickd.toml
+systemctl reload fossickd
+for _ in $(seq 1 50); do "$FOSSICK" dep.js | grep -q dep.js && break; sleep 0.1; done
+"$FOSSICK" dep.js | grep -q dep.js || die "systemctl reload did not apply"
+echo "ok: --install-config and systemctl reload apply the configuration"
 echo "PASS systemd"

@@ -155,6 +155,9 @@ jobs:
       - name: Multi-user visibility
         if: contains(fromJSON('["ext4", "xfs", "btrfs", "f2fs"]'), matrix.fs)
         run: sudo env FSTYPE=${{ matrix.fs }} tests/integration/multiuser.sh
+      - name: Configuration reload
+        if: matrix.fs == 'ext4'
+        run: sudo tests/integration/reload.sh
 
   # The packaged systemd units: hardening, privileges, filtering, hotplugged mounts.
   systemd:

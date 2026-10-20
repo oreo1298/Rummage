@@ -8,6 +8,7 @@ After=fossickd.socket
 [Service]
 Type=simple
 ExecStart=/usr/bin/fossickd
+ExecReload=/bin/kill -HUP $MAINPID
 User=fossick
 Group=fossick
 # fanotify filesystem marks need CAP_SYS_ADMIN; reading every directory and resolving

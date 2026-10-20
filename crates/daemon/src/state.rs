@@ -27,7 +27,7 @@ pub struct Shared {
     generation: (Mutex<u64>, Condvar),
     volumes: Mutex<Vec<VolumeInfo>>,
     pub mode: ServerMode,
-    pub config: Config,
+    config: ArcSwap<Config>,
     pub paths: Paths,
     shutdown: AtomicBool,
 }
@@ -41,10 +41,21 @@ impl Shared {
             generation: (Mutex::new(0), Condvar::new()),
             volumes: Mutex::new(Vec::new()),
             mode,
-            config,
+            config: ArcSwap::from_pointee(config),
             paths,
             shutdown: AtomicBool::new(false),
         })
+    }
+
+    /// The configuration in effect.
+    #[must_use]
+    pub fn config(&self) -> Arc<Config> {
+        self.config.load_full()
+    }
+
+    /// Replaces the configuration (after a reload).
+    pub fn set_config(&self, config: Config) {
+        self.config.store(Arc::new(config));
     }
 
     /// The latest generation.

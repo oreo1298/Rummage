@@ -1,5 +1,6 @@
-# Fossick daemon configuration (/etc/fossick/fossickd.toml). Every key is optional; the values
-# below are the defaults.
+# Fossick daemon configuration (/etc/fossick/fossickd.toml). Every key is optional; the
+# values below are the defaults. Apply changes with `sudo fossick --reload` or
+# `systemctl reload fossickd`; watch_method, track_atime and [server] need a restart.
 
 [index]
 # Only index the filesystems mounted at these paths (empty: every suitable mount).
@@ -7,6 +8,9 @@
 
 # Paths never indexed, with everything below them.
 # exclude = ["/var/lib/docker", "/home/alice/huge-dataset"]
+
+# Names never indexed anywhere, with their contents. Shell patterns: * any characters, ? one.
+# exclude_names = ["node_modules", ".cache", "*.o"]
 
 # Also index access times (refreshed by rescans only; enables da: and the date-accessed sort).
 track_atime = false

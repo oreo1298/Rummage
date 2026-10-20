@@ -21,9 +21,11 @@ use rustix::fs::{AtFlags, Mode, OFlags, StatxAttributes, StatxFlags, openat, sta
 pub mod content;
 pub mod handle;
 pub mod mime;
+pub mod patterns;
 mod prior;
 mod priority;
 
+pub use patterns::NamePatterns;
 pub use prior::IndexPrior;
 pub use priority::lower_thread_priority;
 
@@ -40,6 +42,8 @@ pub struct ScanOptions {
     pub include_mount_points: bool,
     /// Absolute paths that are skipped entirely.
     pub exclude: Vec<PathBuf>,
+    /// Names skipped everywhere (with their contents, for folders).
+    pub exclude_names: NamePatterns,
     /// Mount ids (`stx_mnt_id`) whose mount points are left out entirely, because they are
     /// indexed as volumes of their own.
     pub skip_mounts: Vec<u64>,
@@ -73,6 +77,7 @@ impl Default for ScanOptions {
             cross_mounts: false,
             include_mount_points: true,
             exclude: Vec::new(),
+            exclude_names: NamePatterns::default(),
             skip_mounts: Vec::new(),
             read_acls: false,
             capture_handles: false,
@@ -428,7 +433,7 @@ fn list_dir(shared: &Shared<'_>, job: DirJob) -> (Listing, Vec<Pending>) {
                 }
             };
             let name = e.file_name().to_bytes();
-            if name == b"." || name == b".." {
+            if name == b"." || name == b".." || shared.opts.exclude_names.matches(name) {
                 continue;
             }
             let st = match statx(fd.as_fd(), e.file_name(), STATX_AT, statx_mask()) {

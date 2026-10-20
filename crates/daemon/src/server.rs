@@ -346,7 +346,7 @@ impl Session {
         ctx.visible = vis.map(|v| &v.entries);
         ctx.listable = vis.map(|v| &v.listable);
         ctx.hide_restricted_sizes = vis.is_some();
-        ctx.content_limit = self.server.shared.config.index.content_limit_mib << 20;
+        ctx.content_limit = self.server.shared.config().index.content_limit_mib << 20;
         ctx
     }
 
@@ -530,6 +530,24 @@ impl Session {
                 }
                 if self.server.writer.send(Cmd::Rescan(mount_path)).is_ok() {
                     self.send(&Response::Ok);
+                }
+            }
+            Request::Reload => {
+                if !self.creds.is_root() && self.server.shared.mode == ServerMode::System {
+                    self.error(
+                        None,
+                        ErrorKind::Denied,
+                        "only root may reload the configuration",
+                    );
+                    return;
+                }
+                match crate::config::Config::load(&self.server.shared.paths.config) {
+                    Ok(cfg) => {
+                        if self.server.writer.send(Cmd::Reload(Box::new(cfg))).is_ok() {
+                            self.send(&Response::Ok);
+                        }
+                    }
+                    Err(e) => self.error(None, ErrorKind::BadConfig, e.to_string()),
                 }
             }
             Request::Hello { .. } => self.error(None, ErrorKind::Protocol, "already greeted"),

@@ -23,6 +23,9 @@ pub struct IndexSection {
     pub volumes: Vec<PathBuf>,
     /// Absolute paths never indexed (with everything below them).
     pub exclude: Vec<PathBuf>,
+    /// Names never indexed anywhere, with their contents: shell patterns such as
+    /// `node_modules`, `.cache` or `*.o` (`*` any characters, `?` one).
+    pub exclude_names: Vec<String>,
     /// Index tmpfs and ramfs mounts. Off by default: in system mode the daemon has a private
     /// `/tmp` anyway.
     pub index_tmpfs: bool,
@@ -67,6 +70,7 @@ impl Default for IndexSection {
             track_atime: false,
             volumes: Vec::new(),
             exclude: Vec::new(),
+            exclude_names: Vec::new(),
             index_tmpfs: false,
             network: Vec::new(),
             include_snapshots: false,

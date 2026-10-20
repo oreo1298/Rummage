@@ -122,6 +122,8 @@ pub enum Request {
     Rescan {
         mount_path: Vec<u8>,
     },
+    /// Re-reads the configuration file. Root only (any client of a user daemon).
+    Reload,
 }
 
 /// File kinds as sent over the wire.
@@ -215,6 +217,8 @@ pub enum ErrorKind {
     Internal,
     /// A newer query on the same connection replaced this one.
     Cancelled,
+    /// The configuration file is invalid.
+    BadConfig,
 }
 
 /// Responses and pushes from server to client.

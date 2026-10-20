@@ -21,6 +21,10 @@ fn fail(e: &ClientError) -> Failure {
             kind: ErrorKind::BadQuery | ErrorKind::NotSupported,
             ..
         } => exit::QUERY_ERROR,
+        ClientError::Server {
+            kind: ErrorKind::BadConfig,
+            ..
+        } => exit::BAD_CONFIG,
         _ => exit::IO_ERROR,
     };
     let hint = if code == exit::NO_DAEMON {
@@ -51,12 +55,74 @@ fn proto_sort(s: Sort) -> SortSpec {
     }
 }
 
-pub fn run(cli: &Cli, sort: Sort) -> Result<u8, Failure> {
-    let target = match (&cli.socket, cli.user_daemon) {
+fn target(cli: &Cli) -> Target {
+    match (&cli.socket, cli.user_daemon) {
         (Some(p), _) => Target::Socket(p.clone()),
         (None, true) => Target::User,
         (None, false) => Target::Auto,
+    }
+}
+
+/// `--reload`.
+pub fn reload(cli: &Cli) -> Result<u8, Failure> {
+    let mut client = Client::connect(&target(cli)).map_err(|e| fail(&e))?;
+    client.reload().map_err(|e| fail(&e))?;
+    Ok(exit::FOUND)
+}
+
+/// The system daemon’s configuration file.
+const SYSTEM_CONFIG: &str = "/etc/fossick/fossickd.toml";
+
+/// `--install-config FILE`: installs FILE as the system configuration and reloads the daemon,
+/// putting the old file back if the daemon rejects the new one.
+pub fn install_config(cli: &Cli, file: &std::path::Path) -> Result<u8, Failure> {
+    use std::os::unix::fs::PermissionsExt;
+    if !nix::unistd::geteuid().is_root() {
+        return Err((
+            exit::IO_ERROR,
+            "--install-config needs root (run it with pkexec or sudo)".into(),
+        ));
+    }
+    let io = |what: &str, e: std::io::Error| (exit::IO_ERROR, format!("{what}: {e}"));
+    let text = std::fs::read_to_string(file).map_err(|e| io(&file.display().to_string(), e))?;
+    if let Err(e) = text.parse::<toml::Table>() {
+        return Err((exit::BAD_CONFIG, format!("{}: {e}", file.display())));
+    }
+    let dest = std::path::Path::new(SYSTEM_CONFIG);
+    let old = std::fs::read(dest).ok();
+    let write = |bytes: &[u8]| -> std::io::Result<()> {
+        if let Some(dir) = dest.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = dest.with_extension("toml.new");
+        std::fs::write(&tmp, bytes)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644))?;
+        std::fs::rename(&tmp, dest)
     };
+    write(text.as_bytes()).map_err(|e| io(SYSTEM_CONFIG, e))?;
+    let target = cli.socket.clone().map_or(Target::System, Target::Socket);
+    let result = Client::connect(&target).and_then(|mut c| c.reload());
+    match result {
+        Ok(()) => Ok(exit::FOUND),
+        // Not running: it reads the file when it starts.
+        Err(ClientError::NoDaemon(_)) => Ok(exit::FOUND),
+        Err(e) => {
+            match &old {
+                Some(bytes) => {
+                    let _ = write(bytes);
+                }
+                None => {
+                    let _ = std::fs::remove_file(dest);
+                }
+            }
+            let _ = Client::connect(&target).and_then(|mut c| c.reload());
+            Err(fail(&e))
+        }
+    }
+}
+
+pub fn run(cli: &Cli, sort: Sort) -> Result<u8, Failure> {
+    let target = target(cli);
     let mut client = Client::connect(&target).map_err(|e| fail(&e))?;
     if cli.status {
         return status(&mut client);

@@ -255,6 +255,11 @@ impl Client {
         })
     }
 
+    /// Asks the daemon to re-read its configuration file. Root only for the system daemon.
+    pub fn reload(&mut self) -> Result<(), ClientError> {
+        self.simple(&Request::Reload)
+    }
+
     /// Waits for the next push (a live query changed).
     pub fn next_push(&mut self) -> Result<Response, ClientError> {
         if !self.pushed.is_empty() {

@@ -19,7 +19,8 @@ use fossick_core::{EntryId, EntryMeta, FileKind, IndexConfig, IndexWriter, Volum
 use fossick_proto::{ServerMode, UpdateMethod, VolumeState};
 use fossick_scan::handle::{FileHandle, open_by_handle};
 use fossick_scan::{
-    Applier, IndexPrior, Listing, OpenHook, ScanOptions, Visit, scan_inline, scan_with_prior,
+    Applier, IndexPrior, Listing, NamePatterns, OpenHook, ScanOptions, Visit, scan_inline,
+    scan_with_prior,
 };
 
 use crate::config::WatchMethod;
@@ -100,6 +101,8 @@ pub struct Writer {
     retry: Vec<(VolumeId, FsEvent, u8)>,
     /// Directories by (volume, device, inode), for inotify events.
     dir_inodes: HashMap<(VolumeId, u64, u64), EntryId>,
+    /// `exclude_names` of the configuration in effect.
+    names: NamePatterns,
 }
 
 /// What an event’s directory is in the index.
@@ -158,8 +161,9 @@ impl Writer {
     /// Loads the snapshot (serving it right away) and prepares the writer.
     #[must_use]
     pub fn new(shared: Arc<Shared>, rx: Receiver<Cmd>, tx: Sender<Cmd>) -> Self {
+        let config_names = shared.config().index.exclude_names.clone();
         let cfg = IndexConfig {
-            track_atime: shared.config.index.track_atime,
+            track_atime: shared.config().index.track_atime,
         };
         let path = snapshot_path(&shared);
         let mut snapshot_time_ns = None;
@@ -210,6 +214,7 @@ impl Writer {
             refresh_due: HashSet::new(),
             retry: Vec::new(),
             dir_inodes: HashMap::new(),
+            names: NamePatterns::new(&config_names),
         }
     }
 
@@ -291,6 +296,7 @@ impl Writer {
                 self.update_status();
             }
             Cmd::MountsChanged => self.sync_mounts(),
+            Cmd::Reload(cfg) => self.reload(*cfg),
             Cmd::Rescan(path) => {
                 let vids: Vec<VolumeId> = self
                     .vols
@@ -306,6 +312,43 @@ impl Writer {
         }
     }
 
+    /// Applies an edited configuration: volumes are planned again, and those whose exclusions
+    /// changed are rescanned in full.
+    fn reload(&mut self, cfg: crate::config::Config) {
+        let old = self.shared.config();
+        if *old == cfg {
+            log::info("configuration unchanged");
+            return;
+        }
+        if old.index.watch_method != cfg.index.watch_method
+            || old.index.track_atime != cfg.index.track_atime
+            || old.server != cfg.server
+        {
+            log::warn("watch_method, track_atime and [server] take effect after a restart");
+        }
+        let names_changed = old.index.exclude_names != cfg.index.exclude_names;
+        self.names = NamePatterns::new(&cfg.index.exclude_names);
+        self.shared.set_config(cfg);
+        log::info("configuration reloaded");
+        let before: HashMap<VolumeId, Vec<PathBuf>> = self
+            .vols
+            .iter()
+            .map(|(&v, vol)| (v, vol.plan.exclude.clone()))
+            .collect();
+        self.sync_mounts();
+        let changed: Vec<VolumeId> = self
+            .vols
+            .iter()
+            .filter(|(v, vol)| {
+                names_changed || before.get(v).is_some_and(|e| *e != vol.plan.exclude)
+            })
+            .map(|(&v, _)| v)
+            .collect();
+        for vid in changed {
+            self.enqueue(vid, ScanKind::Full);
+        }
+    }
+
     fn enqueue(&mut self, vid: VolumeId, kind: ScanKind) {
         if !self.queue.iter().any(|&(v, k)| v == vid && k == kind) {
             self.queue.push_back((vid, kind));
@@ -317,7 +360,7 @@ impl Writer {
     }
 
     fn next_timeout(&self) -> Duration {
-        let snap = Duration::from_secs(self.shared.config.index.snapshot_interval_secs.max(10));
+        let snap = Duration::from_secs(self.shared.config().index.snapshot_interval_secs.max(10));
         let mut t = snap.saturating_sub(self.last_snapshot.elapsed());
         for v in self.vols.values() {
             if let Some(next) = v.next_poll {
@@ -328,19 +371,20 @@ impl Writer {
     }
 
     fn on_timers(&mut self) {
-        let interval = Duration::from_secs(self.shared.config.index.snapshot_interval_secs.max(10));
+        let interval =
+            Duration::from_secs(self.shared.config().index.snapshot_interval_secs.max(10));
         if self.last_snapshot.elapsed() >= interval {
             self.snapshot(false);
         }
         let now = Instant::now();
-        let poll = Duration::from_secs(self.shared.config.index.poll_interval_secs.max(10));
+        let poll = Duration::from_secs(self.shared.config().index.poll_interval_secs.max(10));
         let due: Vec<VolumeId> = self
             .vols
             .iter()
             .filter(|(_, v)| v.next_poll.is_some_and(|t| t <= now))
             .map(|(&vid, _)| vid)
             .collect();
-        let full_every = self.shared.config.index.poll_full_every.max(1);
+        let full_every = self.shared.config().index.poll_full_every.max(1);
         for vid in due {
             let mut kind = ScanKind::Pruned;
             if let Some(v) = self.vols.get_mut(&vid) {
@@ -358,7 +402,7 @@ impl Writer {
     fn after_scans(&mut self) {
         self.snapshot(false);
         crate::sys::trim_heap();
-        if self.shared.config.index.refresh_metadata {
+        if self.shared.config().index.refresh_metadata {
             let due: Vec<VolumeId> = self.refresh_due.drain().collect();
             for vid in due {
                 self.enqueue(vid, ScanKind::Full);
@@ -396,7 +440,7 @@ impl Writer {
             }
         };
         let planned = match self.shared.mode {
-            ServerMode::System => plan(&mounts, &self.shared.config.index),
+            ServerMode::System => plan(&mounts, &self.shared.config().index),
             ServerMode::User => user_plan(&mounts),
         };
         let uuids = UuidMap::load();
@@ -521,14 +565,29 @@ impl Writer {
             .map(|v| v.id)
             .collect();
         for vid in gone {
-            log::info(&format!("volume {} is offline", self.mount_display(vid)));
+            let mount_path = self
+                .w
+                .volumes()
+                .get(vid.0 as usize)
+                .map(|v| v.mount_path.clone())
+                .unwrap_or_default();
+            // Still mounted but no longer planned: the configuration excludes it now.
+            let unwanted = mounts.iter().any(|m| m.mount_point == mount_path);
+            if unwanted {
+                log::info(&format!(
+                    "volume {} is no longer indexed",
+                    self.mount_display(vid)
+                ));
+            } else {
+                log::info(&format!("volume {} is offline", self.mount_display(vid)));
+            }
             self.w.set_volume_online(vid, false);
             if let Some(v) = self.vols.remove(&vid) {
                 stop_watch(&v.watch);
             }
             self.handles.retain(|(v, _), _| *v != vid);
             self.queue.retain(|&(v, _)| v != vid);
-            if !self.shared.config.index.keep_offline
+            if (unwanted || !self.shared.config().index.keep_offline)
                 && let Some(root) = self.w.volumes().get(vid.0 as usize).map(|v| v.root)
             {
                 for child in self.w.children(root) {
@@ -553,19 +612,19 @@ impl Writer {
                 vol.note = "network filesystem: polled".into();
                 vol.next_poll = Some(
                     Instant::now()
-                        + Duration::from_secs(self.shared.config.index.poll_interval_secs),
+                        + Duration::from_secs(self.shared.config().index.poll_interval_secs),
                 );
                 return;
             }
             _ => {}
         }
-        let method = self.shared.config.index.watch_method;
+        let method = self.shared.config().index.watch_method;
         if method == WatchMethod::Poll {
             vol.watch = Watch::Poll;
             vol.method = UpdateMethod::Polling;
             vol.note = "polling (watch_method = \"poll\")".into();
             vol.next_poll = Some(
-                Instant::now() + Duration::from_secs(self.shared.config.index.poll_interval_secs),
+                Instant::now() + Duration::from_secs(self.shared.config().index.poll_interval_secs),
             );
             return;
         }
@@ -620,8 +679,9 @@ impl Writer {
         }
         vol.watch = Watch::Poll;
         vol.method = UpdateMethod::Polling;
-        vol.next_poll =
-            Some(Instant::now() + Duration::from_secs(self.shared.config.index.poll_interval_secs));
+        vol.next_poll = Some(
+            Instant::now() + Duration::from_secs(self.shared.config().index.poll_interval_secs),
+        );
     }
 
     fn update_status(&self) {
@@ -662,11 +722,12 @@ impl Writer {
             _ => None,
         };
         ScanOptions {
-            threads: self.shared.config.index.scan_threads,
+            threads: self.shared.config().index.scan_threads,
             low_priority,
             cross_mounts: false,
             include_mount_points: true,
             exclude: vol.plan.exclude.clone(),
+            exclude_names: self.names.clone(),
             skip_mounts,
             read_acls: true,
             capture_handles: matches!(vol.watch, Watch::Fanotify(_)),
@@ -974,12 +1035,15 @@ impl Writer {
                 };
                 let inode = rustix::fs::fstat(&fd).map_or(0, |st| st.st_ino);
                 // It exists, so if the index doesn’t have it where it is (a move or a creation
-                // not applied yet), its events must wait rather than be dropped.
-                match fd_path(&fd).and_then(|p| self.w.lookup_path(&p)) {
+                // not applied yet), its events must wait rather than be dropped. Excluded
+                // folders are never indexed: their events are moot.
+                let path = fd_path(&fd);
+                match path.as_ref().and_then(|p| self.w.lookup_path(p)) {
                     Some(id) if is_dir(&self.w, id, inode) => {
                         self.handles.insert(key, (id, inode));
                         Resolved::Dir(id)
                     }
+                    _ if path.as_ref().is_some_and(|p| self.is_excluded(vid, p)) => Resolved::Gone,
                     _ => Resolved::Pending,
                 }
             }
@@ -1153,13 +1217,18 @@ impl Writer {
         }
     }
 
+    /// True if `path` (on volume `vid`) is excluded by path or by one of its names.
     fn is_excluded(&self, vid: VolumeId, path: &[u8]) -> bool {
-        self.vols.get(&vid).is_some_and(|v| {
-            v.plan.exclude.iter().any(|e| {
-                let e = e.as_os_str().as_bytes();
-                path == e || (path.starts_with(e) && path.get(e.len()) == Some(&b'/'))
-            })
-        })
+        let Some(v) = self.vols.get(&vid) else {
+            return false;
+        };
+        let by_path = v.plan.exclude.iter().any(|e| {
+            let e = e.as_os_str().as_bytes();
+            path == e || (path.starts_with(e) && path.get(e.len()) == Some(&b'/'))
+        });
+        let mount = v.plan.mount.mount_point.as_slice();
+        let relative = path.strip_prefix(mount).unwrap_or(path);
+        by_path || self.names.matches_any_component(relative)
     }
 
     /// Copies a hard-linked file’s fresh metadata to its other names.

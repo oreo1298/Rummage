@@ -119,9 +119,22 @@ fn run() -> Result<()> {
             .name("fossick-accept".into())
             .spawn(move || server.serve(&listener))?;
     }
-    // Wait for a signal, then stop the writer (it writes a final snapshot).
-    let sig = signals.wait().context("waiting for signals")?;
-    log::info(&format!("received {sig}, shutting down"));
+    // SIGHUP re-reads the configuration; SIGTERM and SIGINT stop the writer (it writes a
+    // final snapshot).
+    loop {
+        let sig = signals.wait().context("waiting for signals")?;
+        if sig == nix::sys::signal::Signal::SIGHUP {
+            match Config::load(&shared.paths.config) {
+                Ok(cfg) => {
+                    let _ = tx.send(Cmd::Reload(Box::new(cfg)));
+                }
+                Err(e) => log::warn(&format!("keeping the old configuration: {e}")),
+            }
+            continue;
+        }
+        log::info(&format!("received {sig}, shutting down"));
+        break;
+    }
     shared.request_shutdown();
     let _ = tx.send(Cmd::Shutdown);
     let _ = writer.join();

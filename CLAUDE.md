@@ -19,6 +19,7 @@ cargo +nightly fuzz run query_parser                      # fuzzing (needs cargo
 cargo build --release -p fossickd -p fossick
 sudo tests/integration/storm.sh                           # FSTYPE=xfs WATCH=inotify|poll OPS=…
 sudo tests/integration/multiuser.sh                       # FSTYPE=…, WATCH=…
+sudo tests/integration/reload.sh                          # config reload, exclusions
 sudo tests/integration/systemd.sh                         # needs systemd as PID 1 (CI)
 # Qt GUI (needs Qt ≥ 6.8 + KF6 Kirigami, e.g. Ubuntu 26.04 / Debian 13 / Arch; CI job gui-qt):
 cargo clippy -p fossick-qt --all-targets -- -D warnings

@@ -45,6 +45,8 @@ pub enum Cmd {
     MountsChanged,
     /// Rescan the volume mounted at this path (empty: all volumes).
     Rescan(Vec<u8>),
+    /// Use this configuration (re-read after an edit).
+    Reload(Box<crate::config::Config>),
     /// Write a snapshot and exit.
     Shutdown,
 }

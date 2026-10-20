@@ -33,6 +33,7 @@ mod exit {
     pub const QUERY_ERROR: u8 = 4;
     pub const IO_ERROR: u8 = 5;
     pub const NO_GUI: u8 = 6;
+    pub const BAD_CONFIG: u8 = 7;
 }
 
 #[derive(Parser, Debug)]
@@ -42,7 +43,7 @@ mod exit {
     about = "Instant file name search (Everything syntax)",
     after_help = "EXIT STATUS: 0 = results found, 1 = no results, 2 = usage error, \
                   3 = daemon unavailable, 4 = invalid query, 5 = I/O error, \
-                  6 = no GUI installed.\n\n\
+                  6 = no GUI installed, 7 = invalid daemon configuration.\n\n\
                   Examples:\n  fossick 'ext:pdf dm:thisyear'\n  \
                   fossick -n 20 --sort size --desc 'size:>100mb'\n  \
                   fossick -0 '*.rs' | xargs -0 wc -l\n  \
@@ -140,6 +141,14 @@ struct Cli {
     /// Show the search window, or hide it if it is in front (for a global shortcut).
     #[arg(long, conflicts_with_all = ["local", "load", "status", "rescan"])]
     toggle: bool,
+    /// Ask the daemon to re-read its configuration (root for the system daemon).
+    #[arg(long, conflicts_with_all = ["local", "load", "status", "rescan", "gui", "toggle"])]
+    reload: bool,
+    /// Install FILE as the system daemon’s configuration and reload it; the old file is
+    /// restored if the daemon rejects the new one (root; used by the settings window via
+    /// pkexec).
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["local", "load", "status", "rescan", "gui", "toggle", "reload"])]
+    install_config: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -232,6 +241,12 @@ fn macros_of(cli: &Cli) -> Result<Vec<(String, String)>, Failure> {
 fn run(cli: &Cli) -> Result<u8, Failure> {
     if cli.gui || cli.toggle {
         return gui::run(&cli.query.join(" "), cli.toggle);
+    }
+    if let Some(file) = &cli.install_config {
+        return daemon::install_config(cli, file);
+    }
+    if cli.reload {
+        return daemon::reload(cli);
     }
     let field = SortField::parse(&cli.sort)
         .ok_or_else(|| (2, format!("unknown sort field {:?}", cli.sort)))?;
