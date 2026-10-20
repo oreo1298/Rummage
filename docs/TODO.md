@@ -63,8 +63,8 @@ feature is not listed here and not marked ✅ in `docs/ARCHITECTURE.md`, treat i
   events of a stale watch being dropped). The remaining one: btrfs on recent kernels lists only
   the entries that existed when a directory was *opened*, and the scanner opened the directory
   before the inotify watch was added, so a file created in between was neither listed nor
-  reported. The scanner now reads through a second open made after the watch exists. Confirm over
-  several CI runs before ticking this.
+  reported. The scanner now reads through a second open made after the watch exists. Runs 30
+  and 31 are green; tick this after a few more green runs.
 - [ ] **UUIDs without udev:** `FS_IOC_GETFSUUID` (Linux 6.5+) could identify volumes before udev
   publishes `/dev/disk/by-uuid`; until then the fallback identity is matched by mount point.
 - [ ] **Network filesystems** (polling) have no automated test yet.
