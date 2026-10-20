@@ -56,6 +56,7 @@ impl UserDb for SystemUsers {
 /// A connection’s executor, as the live-update thread sees it.
 #[derive(Debug)]
 struct LiveReg {
+    conn: u64,
     tx: Sender<Exec>,
     pending: Arc<AtomicBool>,
 }
@@ -69,6 +70,7 @@ pub struct Server {
     runs: RunStore,
     mime: Option<MimeGlobs>,
     live: Mutex<Vec<LiveReg>>,
+    next_conn: AtomicU64,
     daemon_uid: u32,
 }
 
@@ -92,6 +94,7 @@ impl Server {
             runs,
             mime: MimeGlobs::load_system(),
             live: Mutex::new(Vec::new()),
+            next_conn: AtomicU64::new(0),
             daemon_uid: rustix::process::getuid().as_raw(),
         })
     }
@@ -190,8 +193,10 @@ impl Server {
         }
         let (tx, rx) = mpsc::channel::<Exec>();
         let pending = Arc::new(AtomicBool::new(false));
+        let conn = self.next_conn.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut regs) = self.live.lock() {
             regs.push(LiveReg {
+                conn,
                 tx: tx.clone(),
                 pending: Arc::clone(&pending),
             });
@@ -233,6 +238,10 @@ impl Server {
             }
         }
         cancel.store(true, Ordering::Relaxed);
+        // The executor stops once every sender is gone, the live registry’s included.
+        if let Ok(mut regs) = self.live.lock() {
+            regs.retain(|r| r.conn != conn);
+        }
         drop(tx);
         if let Ok(e) = executor {
             let _ = e.join();
@@ -595,4 +604,87 @@ impl Session {
 /// Logs and drops a failed accept.
 pub fn log_listen_error(e: &std::io::Error) {
     log::warn(&format!("socket error: {e}"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, Paths};
+    use fossick_proto::{QueryOptions, read_message, write_message};
+
+    #[test]
+    fn queries_over_the_socket_and_connections_clean_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            config: tmp.path().join("none.toml"),
+            state_dir: tmp.path().join("state"),
+            socket: tmp.path().join("socket"),
+        };
+        let shared = Shared::new(ServerMode::System, Config::default(), paths.clone());
+        let (tx, _rx) = mpsc::channel();
+        let server = Server::new(shared, tx);
+        let listener = UnixListener::bind(&paths.socket).unwrap();
+        let s = Arc::clone(&server);
+        std::thread::spawn(move || s.serve(&listener));
+        for i in 0..10 {
+            let mut c = UnixStream::connect(&paths.socket).unwrap();
+            write_message(
+                &mut c,
+                &Request::Hello {
+                    version: PROTOCOL_VERSION,
+                    client: "test".into(),
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                read_message::<Response>(&mut c).unwrap(),
+                Response::Welcome { .. }
+            ));
+            write_message(
+                &mut c,
+                &Request::Query(QueryRequest {
+                    id: i,
+                    text: "anything".into(),
+                    options: QueryOptions::default(),
+                    sort: SortSpec::default(),
+                    macros: Vec::new(),
+                    time_zone: String::new(),
+                    live: true,
+                }),
+            )
+            .unwrap();
+            match read_message::<Response>(&mut c).unwrap() {
+                Response::Result { id, total, .. } => assert_eq!((id, total), (i, 0)),
+                other => panic!("unexpected {other:?}"),
+            }
+            // A bad query is reported, not fatal.
+            write_message(
+                &mut c,
+                &Request::Query(QueryRequest {
+                    id: 100 + i,
+                    text: "regex:(".into(),
+                    options: QueryOptions::default(),
+                    sort: SortSpec::default(),
+                    macros: Vec::new(),
+                    time_zone: String::new(),
+                    live: false,
+                }),
+            )
+            .unwrap();
+            assert!(matches!(
+                read_message::<Response>(&mut c).unwrap(),
+                Response::Error {
+                    kind: ErrorKind::BadQuery,
+                    ..
+                }
+            ));
+            write_message(&mut c, &Request::Goodbye).unwrap();
+        }
+        // Every connection deregisters from live updates (its executor thread can then exit).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while server.live.lock().unwrap().len() > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(server.live.lock().unwrap().len(), 0);
+    }
 }
