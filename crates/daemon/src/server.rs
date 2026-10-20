@@ -682,7 +682,7 @@ mod tests {
         }
         // Every connection deregisters from live updates (its executor thread can then exit).
         let deadline = Instant::now() + Duration::from_secs(5);
-        while server.live.lock().unwrap().len() > 0 && Instant::now() < deadline {
+        while !server.live.lock().unwrap().is_empty() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(server.live.lock().unwrap().len(), 0);
