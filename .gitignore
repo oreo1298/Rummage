@@ -6,3 +6,4 @@
 *.fsidx
 *.fsidx.tmp*
 !/fuzz/seeds/**/*.fsidx
+/crates/gui-qt/.qmlls.ini
