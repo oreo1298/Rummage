@@ -108,9 +108,9 @@ jobs:
           uname -r
       - run: cargo build --release -p fossickd -p fossick
       - name: Storm (default watcher)
-        run: sudo env FSTYPE=${{ matrix.fs }} OPS=8000 tests/integration/storm.sh
+        run: sudo env FSTYPE=${{ matrix.fs }} DEBUG=1 OPS=8000 tests/integration/storm.sh
       - name: Storm (inotify)
-        run: sudo env FSTYPE=${{ matrix.fs }} WATCH=inotify OPS=5000 tests/integration/storm.sh
+        run: sudo env FSTYPE=${{ matrix.fs }} DEBUG=1 WATCH=inotify OPS=5000 tests/integration/storm.sh
       - name: Multi-user visibility
         if: contains(fromJSON('["ext4", "xfs", "btrfs", "f2fs"]'), matrix.fs)
         run: sudo env FSTYPE=${{ matrix.fs }} tests/integration/multiuser.sh

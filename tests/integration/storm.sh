@@ -46,6 +46,16 @@ compare() {
   done
   if [ "$expected" != "$got" ]; then
     diff <(echo "$expected") <(echo "$got") | head -30 >&2 || true
+    echo "--- daemon log (scans, warnings, errors):" >&2
+    grep -v 'fossickd: debug:' "$WORK/daemon.log" | tail -40 >&2 || true
+    # With DEBUG=1: what the daemon did about the first mismatched name.
+    local first
+    first=$(diff <(echo "$expected") <(echo "$got") | grep -m1 '^[<>]' | cut -d' ' -f4- || true)
+    if [ -n "$first" ] && grep -q 'fossickd: debug:' "$WORK/daemon.log"; then
+      echo "--- debug lines naming $(basename "$first"):" >&2
+      grep -aF -- "$(basename "$first")" "$WORK/daemon.log" | tail -30 >&2 || true
+    fi
+    "$FOSSICK" --socket "$SOCK" --status >&2 || true
     die "$label: index differs from the filesystem (< disk, > index)"
   fi
   echo "ok: $label: $(echo "$expected" | wc -l) entries match"

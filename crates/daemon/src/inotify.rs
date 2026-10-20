@@ -53,11 +53,15 @@ impl Inotify {
     pub fn add(&self, dir: BorrowedFd<'_>) -> io::Result<()> {
         let st = rustix::fs::fstat(dir)?;
         let path = format!("/proc/self/fd/{}", dir.as_raw_fd());
+        // Hold the map while adding: the reader may see the new watch’s first events before
+        // `add_watch` returns, and must not drop them as belonging to an unknown watch.
+        let mut wds = self
+            .wds
+            .lock()
+            .map_err(|_| io::Error::other("watch map poisoned"))?;
         match inotify::add_watch(self.fd.as_fd(), path.as_str(), MASK) {
             Ok(wd) => {
-                if let Ok(mut m) = self.wds.lock() {
-                    m.insert(wd, (st.st_dev, st.st_ino));
-                }
+                wds.insert(wd, (st.st_dev, st.st_ino));
                 Ok(())
             }
             Err(rustix::io::Errno::NOSPC) => {
