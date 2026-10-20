@@ -107,6 +107,7 @@ pub mod qobject {
 
 use std::pin::Pin;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -160,6 +161,8 @@ fn settings_page() -> String {
 
 /// The registered global shortcut, if any.
 static SHORTCUT: Mutex<Option<GlobalShortcut>> = Mutex::new(None);
+/// Counts registrations, so a late status from a replaced one is ignored.
+static SHORTCUT_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// The `fossick` command-line tool: next to this program, else from `PATH`. pkexec gets an
 /// absolute path, so the polkit policy for the installed tool applies.
@@ -327,6 +330,7 @@ impl qobject::App {
     }
 
     pub fn set_global_shortcut(mut self: Pin<&mut Self>, enabled: bool, keys: &QString) {
+        let generation = SHORTCUT_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
         // Drop the old registration first (this waits for its listener to stop).
         let old = SHORTCUT
             .lock()
@@ -348,6 +352,9 @@ impl qobject::App {
                 Status::Unavailable(why) => ("unavailable", why),
             };
             let _ = thread.queue(move |mut app| {
+                if SHORTCUT_GENERATION.load(Ordering::Relaxed) != generation {
+                    return;
+                }
                 app.as_mut().set_shortcut_state(QString::from(state));
                 app.set_shortcut_detail(QString::from(&*detail));
             });
