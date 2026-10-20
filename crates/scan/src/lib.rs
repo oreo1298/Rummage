@@ -122,7 +122,7 @@ pub struct Listing {
     pub incomplete: bool,
     /// The directory’s (mtime, ctime) in ns, observed before it was read.
     pub times: Option<(i64, i64)>,
-    /// The directory’s device and inode numbers (with an `on_open` hook).
+    /// The directory’s device and inode numbers.
     pub dev_ino: Option<(u64, u64)>,
     /// Wall-clock time (ns) when the directory was read.
     pub listed_at: i64,
@@ -374,11 +374,8 @@ fn list_dir(shared: &Shared<'_>, job: DirJob) -> (Listing, Vec<Pending>) {
     if let Some(hook) = &shared.opts.on_open {
         (hook.0)(&path, fd.as_fd());
     }
-    let dev_ino = shared
-        .opts
-        .on_open
-        .as_ref()
-        .and_then(|_| rustix::fs::fstat(&*fd).ok())
+    let dev_ino = rustix::fs::fstat(&*fd)
+        .ok()
         .map(|st| (st.st_dev, st.st_ino));
     let acl = if shared.opts.read_acls {
         read_acl(fd.as_fd())
@@ -736,6 +733,9 @@ pub fn scan_inline(
 pub struct Applier {
     map: Vec<Option<EntryId>>,
     read_acls: bool,
+    /// Listings not applied because the entry they mapped to is a different directory:
+    /// (scan id, entry, the listed directory’s inode).
+    pub mismatched: Vec<(u32, EntryId, u64)>,
     /// Entries inserted, updated or removed.
     pub changes: u64,
     /// Files with more than one name seen so far: `(entry, inode)`. Callers drain it.
@@ -751,6 +751,7 @@ impl Applier {
         Self {
             map: vec![Some(root_entry)],
             read_acls,
+            mismatched: Vec::new(),
             changes: 0,
             multi_links: Vec::new(),
             errors: 0,
@@ -767,6 +768,14 @@ impl Applier {
     pub fn apply(&mut self, w: &mut IndexWriter, listing: Listing) -> Option<EntryId> {
         let parent = self.map.get(listing.dir as usize).copied().flatten()?;
         if !w.is_live(parent) {
+            return None;
+        }
+        // Never apply a listing to an entry that isn’t that directory (it was replaced between
+        // its parent’s listing and its own).
+        if let Some((_, ino)) = listing.dev_ino
+            && w.meta(parent).is_some_and(|m| m.inode != ino)
+        {
+            self.mismatched.push((listing.dir, parent, ino));
             return None;
         }
         if self.read_acls {
@@ -790,18 +799,10 @@ impl Applier {
         let full = !listing.unchanged && !listing.incomplete;
         let mut seen: Vec<EntryId> = Vec::with_capacity(listing.entries.len());
         for e in listing.entries {
-            // A subdirectory’s recorded times describe its own listing, which comes later:
-            // keep the old ones (none for a new directory) until then.
-            let prev_times = if e.meta.kind().is_dir() {
-                w.lookup(parent, &e.name).and_then(|id| w.dir_times(id))
-            } else {
-                None
-            };
+            // (A subdirectory’s listing times are its own: upserting keeps them, and a new
+            // directory has none until it is listed.)
             match w.upsert(parent, &e.name, &e.meta) {
                 Ok(id) => {
-                    if e.meta.kind().is_dir() {
-                        let _ = w.set_dir_times(id, prev_times);
-                    }
                     seen.push(id);
                     self.changes += 1;
                     if e.meta.nlink > 1 && !e.meta.kind().is_dir() {

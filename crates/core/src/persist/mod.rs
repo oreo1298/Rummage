@@ -36,7 +36,7 @@ use crate::perm::AclEntry;
 /// File magic.
 pub const MAGIC: [u8; 8] = *b"FOSSIDX\0";
 /// Current format version. Bump on any incompatible layout change and add a migration.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 const ENDIAN_MARK: u32 = 0x0102_0304;
 const ALIGN: u64 = 64;
 const HEADER_LEN: u64 = 128;
@@ -174,6 +174,8 @@ enum Kind {
     DirFiles = 35,
     DirFolders = 36,
     DirRestricted = 37,
+    DirListedM = 38,
+    DirListedC = 39,
     Owners = 40,
     BigSize = 41,
     OddTime = 42,
@@ -395,6 +397,8 @@ fn write_to(g: &Generation, tmp: &Path) -> Result<(), PersistError> {
     w.column(Kind::DirSize, &d.dirs.size)?;
     w.column(Kind::DirMtime, &d.dirs.mtime_ns)?;
     w.column(Kind::DirCtime, &d.dirs.ctime_ns)?;
+    w.column(Kind::DirListedM, &d.dirs.listed_m)?;
+    w.column(Kind::DirListedC, &d.dirs.listed_c)?;
     w.column(Kind::DirKey, &d.dirs.dir_key)?;
     w.column(Kind::DirFiles, &d.dirs.files)?;
     w.column(Kind::DirFolders, &d.dirs.folders)?;
@@ -744,6 +748,8 @@ fn from_mapping(map: Arc<Mapping>, verify: Verify) -> Result<Snapshot, PersistEr
         size: mapped_column(&map, &secs, Kind::DirSize, dp)?,
         mtime_ns: mapped_column(&map, &secs, Kind::DirMtime, dp)?,
         ctime_ns: mapped_column(&map, &secs, Kind::DirCtime, dp)?,
+        listed_m: mapped_column(&map, &secs, Kind::DirListedM, dp)?,
+        listed_c: mapped_column(&map, &secs, Kind::DirListedC, dp)?,
         dir_key: mapped_column(&map, &secs, Kind::DirKey, dp)?,
         files: mapped_column(&map, &secs, Kind::DirFiles, dp)?,
         folders: mapped_column(&map, &secs, Kind::DirFolders, dp)?,

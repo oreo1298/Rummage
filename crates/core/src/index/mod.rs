@@ -115,6 +115,11 @@ pub(crate) struct DirStore {
     pub(crate) size: Column<u64>,
     pub(crate) mtime_ns: Column<i64>,
     pub(crate) ctime_ns: Column<i64>,
+    /// (mtime, ctime) in ns observed by the directory’s last complete listing, for pruned
+    /// rescans; `i64::MIN` when unknown. Separate from the displayed times above, which follow
+    /// every metadata update.
+    pub(crate) listed_m: Column<i64>,
+    pub(crate) listed_c: Column<i64>,
     pub(crate) dir_key: Column<u32>,
     pub(crate) files: Column<u32>,
     pub(crate) folders: Column<u32>,
@@ -128,6 +133,8 @@ impl DirStore {
             size: Column::new(PAGE_SIZE),
             mtime_ns: Column::new(PAGE_SIZE),
             ctime_ns: Column::new(PAGE_SIZE),
+            listed_m: Column::new(PAGE_SIZE),
+            listed_c: Column::new(PAGE_SIZE),
             dir_key: Column::new(PAGE_SIZE),
             files: Column::new(PAGE_SIZE),
             folders: Column::new(PAGE_SIZE),
@@ -144,6 +151,8 @@ impl DirStore {
         self.size.push_page(0);
         self.mtime_ns.push_page(i64::MIN);
         self.ctime_ns.push_page(i64::MIN);
+        self.listed_m.push_page(i64::MIN);
+        self.listed_c.push_page(i64::MIN);
         self.dir_key.push_page(0);
         self.files.push_page(0);
         self.folders.push_page(0);
@@ -792,14 +801,14 @@ impl Generation {
             .find(|&id| self.path(id) == path)
     }
 
-    /// A directory’s modification and change times in nanoseconds (directories keep full
-    /// precision so rescans can tell whether they changed).
+    /// The modification and change times (ns) a directory had when it was last listed
+    /// completely (`None`: never, or not trustworthy), for pruned rescans.
     #[must_use]
     pub fn dir_times_ns(&self, id: EntryId) -> Option<(i64, i64)> {
         let d = self.data.dir_of(id.0)? as usize;
         let (m, c) = (
-            self.data.dirs.mtime_ns.get(d),
-            self.data.dirs.ctime_ns.get(d),
+            self.data.dirs.listed_m.get(d),
+            self.data.dirs.listed_c.get(d),
         );
         (m != i64::MIN && c != i64::MIN).then_some((m, c))
     }
@@ -863,6 +872,8 @@ impl Generation {
             + column_bytes(&d.dirs.size)
             + column_bytes(&d.dirs.mtime_ns)
             + column_bytes(&d.dirs.ctime_ns)
+            + column_bytes(&d.dirs.listed_m)
+            + column_bytes(&d.dirs.listed_c)
             + column_bytes(&d.dirs.dir_key)
             + column_bytes(&d.dirs.files)
             + column_bytes(&d.dirs.folders)

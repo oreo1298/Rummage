@@ -22,6 +22,39 @@ fn s(p: Vec<u8>) -> String {
 }
 
 #[test]
+fn listing_times_are_separate_from_displayed_times() {
+    let (mut w, root) = setup();
+    let d = w.insert(root, b"z", &dir()).unwrap();
+    w.insert(root, b"a", &dir()).unwrap();
+    let g = w.publish();
+    assert_eq!(g.dir_times_ns(d), None, "not listed yet");
+    // Recording listing times must not move the directory in the date order.
+    w.set_dir_times(d, Some((5, 6))).unwrap();
+    let g = w.publish();
+    w.check_invariants().unwrap();
+    assert_eq!(g.dir_times_ns(d), Some((5, 6)));
+    assert_eq!(
+        g.time(d, TimeField::Modified),
+        Some(Timestamp::from_secs(1_700_000_000))
+    );
+    // Metadata updates change the displayed time and keep the listing times.
+    let mut newer = dir();
+    newer.mtime = Some(Timestamp::from_secs(1_800_000_000));
+    w.update(d, &newer).unwrap();
+    let g = w.publish();
+    w.check_invariants().unwrap();
+    assert_eq!(g.dir_times_ns(d), Some((5, 6)));
+    assert_eq!(
+        g.time(d, TimeField::Modified),
+        Some(Timestamp::from_secs(1_800_000_000))
+    );
+    w.set_dir_times(d, None).unwrap();
+    let g = w.publish();
+    w.check_invariants().unwrap();
+    assert_eq!(g.dir_times_ns(d), None);
+}
+
+#[test]
 fn build_and_read_back() {
     let (mut w, root) = setup();
     let docs = w.insert(root, b"docs", &dir()).unwrap();

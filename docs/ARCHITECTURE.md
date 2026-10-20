@@ -132,9 +132,13 @@ tables (`Vec<Arc<…>>`) and copies only pages touched since the last publish.
 
 ### 2.6 Persistence
 
-`FSIDX` v1 snapshot: header (magic, format version, little-endian marker, creation time,
-generation, volume table), section table (kind, page, offset, length, xxh3-64), then raw column,
-arena and order sections aligned to 64 bytes. It is:
+`FOSSIDX` snapshot (format version 3): header (magic, format version, little-endian marker,
+creation time, generation, volume table), section table (kind, page, offset, length, xxh3-64),
+then raw column, arena and order sections aligned to 64 bytes. Version 2 added directory ACLs;
+version 3 stores each directory’s *listing times* (the mtime/ctime it had when it was last
+listed completely) separately from its displayed times. Pruned rescans compare against the
+listing times. Every metadata update changes the displayed times, and those are what sorting
+and `dm:` use. It is:
 
 - written to a temp file in the same directory, `fsync`ed, renamed over the old file, then the
   directory is `fsync`ed. The file is never modified in place.
@@ -356,12 +360,20 @@ after it, re-reading the filesystem, so the result is current either way.
 3. Then one full low-priority rescan per volume refreshes file sizes and dates
    (`refresh_metadata`, on by default).
 
-A directory’s recorded times always describe *its own last complete listing*: they are taken
-just before the directory is read, and are not touched when its metadata changes through an event
-or through its parent’s listing. Otherwise a directory whose listing failed, or whose contents
-changed while events were being applied, could look current forever. A directory that disappears
-during a scan (renamed, say) yields an incomplete listing, never an empty one, so its indexed
-contents aren’t thrown away.
+A directory’s recorded times (its *listing times*, stored apart from the times it displays)
+always describe *its own last complete listing*: they are taken just before the directory is read,
+and are not touched when its metadata changes through an event or through its parent’s listing. A
+directory that was never listed has none. Otherwise a directory whose listing failed, or whose
+contents changed while events were being applied, could look current forever. Times within 50 ms
+of the moment of reading are not recorded at all: the kernel stamps directories with a coarse
+clock, so an entry added in the same tick right after the read wouldn’t change them (git treats
+“racy” index entries the same way). FAT-family volumes are never pruned: their root directory has
+no timestamps and the others have 2-second resolution.
+
+Before a listing is applied, the directory’s inode is compared with the index entry it maps to. A
+directory replaced by another one between its parent’s listing and its own is not applied to the
+old entry. A directory that disappears during a scan (renamed, say) yields an incomplete listing,
+never an empty one, so its indexed contents aren’t thrown away.
 
 ### 4.5 IPC ✅
 

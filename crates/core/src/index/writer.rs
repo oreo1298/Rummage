@@ -423,14 +423,15 @@ impl IndexWriter {
         })
     }
 
-    /// A directory’s recorded modification and change times (ns), which rescans compare with
-    /// the filesystem to decide whether to read it again.
+    /// The modification and change times (ns) a directory had when it was last listed
+    /// completely, which rescans compare with the filesystem to decide whether to read it again.
+    /// Independent of the displayed times, which every metadata update changes.
     #[must_use]
     pub fn dir_times(&self, id: EntryId) -> Option<(i64, i64)> {
         let d = self.data.dir_of(id.0)? as usize;
         let (m, c) = (
-            self.data.dirs.mtime_ns.get(d),
-            self.data.dirs.ctime_ns.get(d),
+            self.data.dirs.listed_m.get(d),
+            self.data.dirs.listed_c.get(d),
         );
         (m != i64::MIN && c != i64::MIN).then_some((m, c))
     }
@@ -445,8 +446,10 @@ impl IndexWriter {
     ) -> Result<(), IndexError> {
         let d = self.dir_record(id.0)? as usize;
         let (m, c) = times.unwrap_or((i64::MIN, i64::MIN));
-        self.data.dirs.mtime_ns.set(d, m);
-        self.data.dirs.ctime_ns.set(d, c);
+        self.data.dirs.listed_m.set(d, m);
+        self.data.dirs.listed_c.set(d, c);
+        // Not visible to searches, but it must reach the next published generation (and so
+        // the next snapshot).
         self.batch.touched.insert(id.0);
         Ok(())
     }
@@ -794,6 +797,9 @@ impl IndexWriter {
                 .set(du, meta.mtime.map_or(i64::MIN, Timestamp::as_nanos));
             dirs.ctime_ns
                 .set(du, meta.ctime.map_or(i64::MIN, Timestamp::as_nanos));
+            // Not listed yet.
+            dirs.listed_m.set(du, i64::MIN);
+            dirs.listed_c.set(du, i64::MIN);
             dirs.dir_key.set(du, 0);
             dirs.files.set(du, 0);
             dirs.folders.set(du, 0);
@@ -1835,6 +1841,42 @@ impl IndexWriter {
                 }
             }
             prev = Some(id);
+        }
+        // Every entry but a volume root has a live directory as parent, and child lists hold
+        // exactly the entries whose parent is that directory.
+        let mut per_parent: HashMap<u32, usize> = HashMap::new();
+        for id in g.iter() {
+            if d.flags_of(id.0) & flags::VOLUME_ROOT != 0 {
+                continue;
+            }
+            match d.parent_of(id.0) {
+                Some(p) if d.is_live(p) && d.is_dir(p) => *per_parent.entry(p).or_default() += 1,
+                _ => {
+                    return Err(format!(
+                        "{:?} (id {}) has no live parent directory",
+                        crate::name::display_name(d.name_of(id.0)),
+                        id.0
+                    ));
+                }
+            }
+        }
+        for id in g.iter() {
+            if d.dir_of(id.0).is_none() {
+                continue;
+            }
+            let kids = self.children(id);
+            let expect = per_parent.get(&id.0).copied().unwrap_or(0);
+            if kids.len() != expect
+                || kids
+                    .iter()
+                    .any(|k| !d.is_live(k.0) || d.parent_of(k.0) != Some(id.0))
+            {
+                return Err(format!(
+                    "child list of {:?} has {} ids, {expect} entries name it as parent",
+                    crate::name::display_name(&g.path(id)),
+                    kids.len()
+                ));
+            }
         }
         // Folder sizes and counts.
         for id in g.iter() {

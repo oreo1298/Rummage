@@ -11,6 +11,9 @@ need_root
 trap cleanup_common EXIT
 FSTYPE=${FSTYPE:-ext4}
 OPS=${OPS:-10000}
+# Polling sees appends (which don't touch the directory) only in full polls: make every poll
+# full, so sizes can be compared within the wait.
+if [ "${WATCH:-}" = poll ]; then export POLL_FULL_EVERY=${POLL_FULL_EVERY:-1}; fi
 setup_work
 make_fs "$FSTYPE"
 M=$MNT
@@ -47,10 +50,11 @@ compare() {
   if [ "$expected" != "$got" ]; then
     diff <(echo "$expected") <(echo "$got") | head -30 >&2 || true
     echo "--- daemon log (scans, warnings, errors):" >&2
-    grep -v 'fossickd: debug:' "$WORK/daemon.log" | tail -40 >&2 || true
+    grep -av 'fossickd: debug:' "$WORK/daemon.log" | tail -40 >&2 || true
+    grep -a -m3 -B20 'invariant broken' "$WORK/daemon.log" >&2 || true
     # With DEBUG=1: what the daemon did about the first mismatched name.
     local first
-    first=$(diff <(echo "$expected") <(echo "$got") | grep -m1 '^[<>]' | cut -d' ' -f4- || true)
+    first=$(diff <(echo "$expected") <(echo "$got") | grep -a -m1 '^[<>]' | cut -d' ' -f4- || true)
     if [ -n "$first" ] && grep -q 'fossickd: debug:' "$WORK/daemon.log"; then
       echo "--- debug lines naming $(basename "$first"):" >&2
       grep -aF -- "$(basename "$first")" "$WORK/daemon.log" | tail -30 >&2 || true

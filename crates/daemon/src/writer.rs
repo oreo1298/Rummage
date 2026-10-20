@@ -38,6 +38,10 @@ const SCAN_PUBLISH_EVERY: Duration = Duration::from_millis(500);
 /// filesystem timestamps, e.g. 2 s on FAT).
 const GRANULARITY_NS: i64 = 2_000_000_000;
 
+/// `FOSSICK_CHECK_INVARIANTS=1` verifies the index after every publish (slow; for tests).
+static CHECK_INVARIANTS: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("FOSSICK_CHECK_INVARIANTS").is_some());
+
 /// How a volume is kept current.
 #[derive(Debug)]
 enum Watch {
@@ -357,6 +361,9 @@ impl Writer {
             let g = self.w.publish();
             self.shared.publish(g);
             self.dirty = true;
+            if *CHECK_INVARIANTS && let Err(e) = self.w.check_invariants() {
+                log::error(&format!("index invariant broken: {e}"));
+            }
         }
         self.last_publish = Instant::now();
     }
@@ -455,11 +462,7 @@ impl Writer {
             };
             seen.insert(vid);
             if let Some(root) = self.w.volumes().get(vid.0 as usize).map(|v| v.root) {
-                // Refresh the root’s metadata but keep its recorded times: they belong to its
-                // last listing, which the coming rescan compares against.
-                let times = self.w.dir_times(root);
                 let _ = self.w.update(root, &root_meta);
-                let _ = self.w.set_dir_times(root, times);
             }
             if let Some(kind) = kind {
                 let class = p.class;
@@ -739,6 +742,13 @@ impl Writer {
         let handle = listing.handle.take();
         let dev_ino = listing.dev_ino;
         let dir = applier.apply(&mut self.w, listing);
+        for (_, entry, inode) in applier.mismatched.drain(..) {
+            log::debug(&format!(
+                "not applying a listing of inode {inode} to {} (inode {})",
+                String::from_utf8_lossy(&self.w.path(entry)),
+                self.w.meta(entry).map_or(0, |m| m.inode)
+            ));
+        }
         for (id, inode) in applier.multi_links.drain(..) {
             let (ids, _) = self.links.entry((vid, inode)).or_default();
             if !ids.contains(&id) {
@@ -956,16 +966,6 @@ impl Writer {
         }
     }
 
-    /// Updates an entry’s metadata. A directory keeps its recorded times: they describe its
-    /// last listing, which pruned rescans rely on.
-    fn update_entry(&mut self, id: EntryId, meta: &EntryMeta) {
-        let times = self.w.dir_times(id);
-        let _ = self.w.update(id, meta);
-        if meta.kind().is_dir() {
-            let _ = self.w.set_dir_times(id, times);
-        }
-    }
-
     /// Brings the index entry for `dir/name` in line with the filesystem. Returns false if that
     /// can’t be decided yet.
     fn refresh_child(
@@ -1024,7 +1024,7 @@ impl Writer {
                             && (!meta.kind().is_dir()
                                 || self.w.meta(id).is_some_and(|m| m.inode == meta.inode)) =>
                     {
-                        self.update_entry(id, &meta);
+                        let _ = self.w.update(id, &meta);
                         if meta.kind().is_dir() {
                             self.refresh_acl(id, &path);
                         } else if meta.nlink > 1 {
@@ -1049,7 +1049,7 @@ impl Writer {
             && let (Ok((meta, _)), Some(path)) =
                 (fossick_scan::stat_at(fd.as_fd(), b""), fd_path(&fd))
         {
-            self.update_entry(dir, &meta);
+            let _ = self.w.update(dir, &meta);
             self.refresh_acl(dir, &path);
             return true;
         }
@@ -1061,7 +1061,7 @@ impl Writer {
             None => {
                 let path = self.w.path(dir);
                 if let Ok((meta, _, _)) = fossick_scan::stat_path(&bytes_path(&path)) {
-                    self.update_entry(dir, &meta);
+                    let _ = self.w.update(dir, &meta);
                     self.refresh_acl(dir, &path);
                 }
                 true
@@ -1121,7 +1121,6 @@ impl Writer {
             }
             return;
         }
-        let _ = self.w.set_dir_times(id, None);
         let opts = ScanOptions {
             threads: 1,
             low_priority: false,
@@ -1199,7 +1198,7 @@ impl Writer {
                         let _ = self.w.remove(victim);
                     }
                     if self.w.rename(id, td, to_name).is_ok() {
-                        self.update_entry(id, &meta);
+                        let _ = self.w.update(id, &meta);
                         return true;
                     }
                 }

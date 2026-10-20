@@ -57,7 +57,9 @@ poll_full_every = ${POLL_FULL_EVERY:-6}
 [server]
 socket = "$SOCK"
 CFG
-  "$FOSSICKD" --config "$WORK/fossickd.toml" --state-dir "$WORK/state" ${DEBUG:+--debug} \
+  # DEBUG=1: debug messages, and the index is verified after every publish.
+  ${DEBUG:+env FOSSICK_CHECK_INVARIANTS=1} \
+    "$FOSSICKD" --config "$WORK/fossickd.toml" --state-dir "$WORK/state" ${DEBUG:+--debug} \
     >> "$WORK/daemon.log" 2>&1 &
   DAEMON_PID=$!
   wait_ready
