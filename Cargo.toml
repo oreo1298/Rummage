@@ -1,0 +1,69 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/scan", "crates/cli", "crates/bench"]
+default-members = ["crates/core", "crates/scan", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/oreo1298/Rummage"
+homepage = "https://github.com/oreo1298/Rummage"
+authors = ["Fossick contributors"]
+
+[workspace.dependencies]
+fossick-core = { path = "crates/core", version = "0.1.0" }
+fossick-scan = { path = "crates/scan", version = "0.1.0" }
+
+aho-corasick = "1.1"
+anyhow = "1"
+arc-swap = "1.7"
+bstr = "1.10"
+clap = { version = "4.5", features = ["derive", "wrap_help"] }
+crossbeam-deque = "0.8"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+icu_casemap = "2"
+icu_normalizer = "2"
+jiff = "0.2"
+libc = "0.2"
+memchr = "2.7"
+memmap2 = "0.9"
+proptest = "1"
+rayon = "1.10"
+regex = "1.11"
+regex-syntax = "0.8"
+rustix = { version = "1", features = ["fs", "process", "thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smallvec = { version = "1.13", features = ["union", "const_generics"] }
+tempfile = "3"
+thiserror = "2"
+toml = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zerocopy = { version = "0.8", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+undocumented_unsafe_blocks = "deny"
+cast_lossless = "warn"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+[profile.bench]
+inherits = "release"
+debug = true

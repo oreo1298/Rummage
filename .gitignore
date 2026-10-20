@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+*.fsidx
+*.fsidx.tmp*
