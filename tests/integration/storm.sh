@@ -60,8 +60,13 @@ compare() {
       local tail2
       tail2="$(basename "$(dirname "$first")")/$(basename "$first")"
       echo "--- debug lines naming $tail2 (and its directory):" >&2
-      grep -aF -e "$tail2" -e "/$(basename "$(dirname "$first")") " "$WORK/daemon.log" \
-        | tail -40 >&2 || true
+      # (followed by a space or the end of the line, so f4 doesn't match f40)
+      T="$tail2" D="/$(basename "$(dirname "$first")")" awk '
+        { for (i = 0; (j = index(substr($0, i + 1), ENVIRON["T"])) > 0; i += j) {
+            c = substr($0, i + j + length(ENVIRON["T"]), 1)
+            if (c == " " || c == "") { print; next } }
+          if (index($0, ENVIRON["D"] " (") || index($0, ENVIRON["D"] ":")) print }
+      ' "$WORK/daemon.log" | tail -40 >&2 || true
       grep -a 'unindexed directory\|not indexed yet\|not applying\|ambiguous' "$WORK/daemon.log" \
         | tail -10 >&2 || true
     fi

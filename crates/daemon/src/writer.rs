@@ -763,6 +763,7 @@ impl Writer {
     fn apply_listing(&mut self, vid: VolumeId, applier: &mut Applier, mut listing: Listing) {
         let handle = listing.handle.take();
         let dev_ino = listing.dev_ino;
+        let (entries, unchanged) = (listing.entries.len(), listing.unchanged);
         let dir = applier.apply(&mut self.w, listing);
         for (_, entry, inode) in applier.mismatched.drain(..) {
             log::debug(&format!(
@@ -780,6 +781,14 @@ impl Writer {
         let Some(dir) = dir else {
             return;
         };
+        if log::debugging() {
+            log::debug(&format!(
+                "listed {}: {} entries{}",
+                String::from_utf8_lossy(&self.w.path(dir)),
+                entries,
+                if unchanged { " (unchanged)" } else { "" }
+            ));
+        }
         if let Some(h) = handle {
             let inode = self.w.meta(dir).map_or(0, |m| m.inode);
             self.handles.insert((vid, h), (dir, inode));
@@ -860,7 +869,13 @@ impl Writer {
         match ev {
             FsEvent::Child { dir, name } => match self.resolve(vid, dir) {
                 Resolved::Dir(d) => self.refresh_child(vid, d, name, handle_of(dir)),
-                Resolved::Gone => true,
+                Resolved::Gone => {
+                    log::debug(&format!(
+                        "dropped event for {} (its directory is gone)",
+                        String::from_utf8_lossy(name)
+                    ));
+                    true
+                }
                 Resolved::Pending => {
                     log::debug(&format!(
                         "directory of {} not indexed yet",
