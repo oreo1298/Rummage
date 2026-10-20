@@ -134,195 +134,196 @@ FocusScope {
             }
         }
 
-        QQC2.ScrollView {
+        // No ScrollView around the table: a ScrollView’s implicit size is its content size, and a
+        // TableView laid out at its content height (rows × row height) creates a delegate for
+        // every cell of the result set.
+        TableView {
+            id: table
             Layout.fillWidth: true
             Layout.fillHeight: true
+            clip: true
+            focus: true
+            model: root.model
+            boundsBehavior: Flickable.StopAtBounds
+            keyNavigationEnabled: false
+            pointerNavigationEnabled: false
+            resizableColumns: true
+            reuseItems: true
+            Accessible.role: Accessible.Table
+            Accessible.name: qsTr("Search results")
+            function widthOf(column) {
+                const c = root.columnState(column)
+                if (!c || !c.visible) return 0
+                const w = explicitColumnWidth(column)
+                return w > 0 ? w : c.width
+            }
+            // The last visible column takes the remaining width.
+            columnWidthProvider: column => {
+                const w = widthOf(column)
+                if (w === 0) return 0
+                const visible = root.order.filter(l => widthOf(l) > 0)
+                if (visible[visible.length - 1] !== column) return w
+                const others = visible.slice(0, -1).reduce((sum, l) => sum + widthOf(l), 0)
+                return Math.max(w, table.width - others)
+            }
+            onWidthChanged: Qt.callLater(forceLayout)
+            onColumnsChanged: if (columns > 0) Qt.callLater(root.restoreOrder)
+            onColumnMoved: (logical, oldVisual, newVisual) => {
+                const o = root.order.slice()
+                o.splice(oldVisual, 1)
+                o.splice(newVisual, 0, logical)
+                root.order = o
+            }
 
-            TableView {
-                id: table
-                clip: true
-                focus: true
-                model: root.model
-                boundsBehavior: Flickable.StopAtBounds
-                keyNavigationEnabled: false
-                pointerNavigationEnabled: false
-                resizableColumns: true
-                reuseItems: true
-                Accessible.role: Accessible.Table
-                Accessible.name: qsTr("Search results")
-                function widthOf(column) {
-                    const c = root.columnState(column)
-                    if (!c || !c.visible) return 0
-                    const w = explicitColumnWidth(column)
-                    return w > 0 ? w : c.width
+            delegate: Rectangle {
+                id: cell
+                required property int row
+                required property int column
+                required property var model
+                readonly property bool isSelected: model.selected === true
+                implicitHeight: Kirigami.Units.gridUnit * 1.5
+                color: isSelected ? Kirigami.Theme.highlightColor
+                     : (row % 2 ? Kirigami.Theme.alternateBackgroundColor : Kirigami.Theme.backgroundColor)
+                Accessible.role: Accessible.Cell
+                // Plain text: the name and path labels carry highlight markup.
+                Accessible.name: cell.column <= 1 ? (cell.model.display || "") : label.text
+                Accessible.selected: isSelected
+
+                Rectangle {
+                    anchors.fill: parent
+                    visible: cell.row === root.currentRow && table.activeFocus
+                    color: "transparent"
+                    border.color: Kirigami.Theme.focusColor
+                    border.width: cell.column === 0 ? 1 : 0
                 }
-                // The last visible column takes the remaining width.
-                columnWidthProvider: column => {
-                    const w = widthOf(column)
-                    if (w === 0) return 0
-                    const visible = root.order.filter(l => widthOf(l) > 0)
-                    if (visible[visible.length - 1] !== column) return w
-                    const others = visible.slice(0, -1).reduce((sum, l) => sum + widthOf(l), 0)
-                    return Math.max(w, table.width - others)
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: Kirigami.Units.smallSpacing
+                    anchors.rightMargin: Kirigami.Units.smallSpacing
+                    spacing: Kirigami.Units.smallSpacing
+                    Kirigami.Icon {
+                        visible: cell.column === 0
+                        source: cell.model.iconName || "text-x-generic"
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                    }
+                    QQC2.Label {
+                        id: label
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        textFormat: cell.column <= 1 ? Text.StyledText : Text.PlainText
+                        horizontalAlignment: cell.column === 2 || cell.column === 10 ? Text.AlignRight : Text.AlignLeft
+                        color: cell.isSelected ? Kirigami.Theme.highlightedTextColor
+                             : (cell.model.offline ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.textColor)
+                        text: {
+                            if (!cell.model.loaded) return ""
+                            const v = cell.model.value
+                            if (cell.column <= 1) return cell.model.html || ""
+                            if (cell.column === 2) return v < 0 ? "" : Qt.locale().formattedDataSize(v, 1, Locale.DataSizeTraditionalFormat)
+                            if (Columns.isDate(cell.column))
+                                return v < 0 ? "" : new Date(v * 1000).toLocaleString(Qt.locale(), Locale.ShortFormat)
+                            return cell.model.display || ""
+                        }
+                    }
                 }
-                onWidthChanged: Qt.callLater(forceLayout)
-                onColumnsChanged: if (columns > 0) Qt.callLater(root.restoreOrder)
-                onColumnMoved: (logical, oldVisual, newVisual) => {
-                    const o = root.order.slice()
-                    o.splice(oldVisual, 1)
-                    o.splice(newVisual, 0, logical)
-                    root.order = o
-                }
 
-                delegate: Rectangle {
-                    id: cell
-                    required property int row
-                    required property int column
-                    required property var model
-                    readonly property bool isSelected: model.selected === true
-                    implicitHeight: Kirigami.Units.gridUnit * 1.5
-                    color: isSelected ? Kirigami.Theme.highlightColor
-                         : (row % 2 ? Kirigami.Theme.alternateBackgroundColor : Kirigami.Theme.backgroundColor)
-                    Accessible.role: Accessible.Cell
-                    // Plain text: the name and path labels carry highlight markup.
-                    Accessible.name: cell.column <= 1 ? (cell.model.display || "") : label.text
-                    Accessible.selected: isSelected
-
-                    Rectangle {
-                        anchors.fill: parent
-                        visible: cell.row === root.currentRow && table.activeFocus
-                        color: "transparent"
-                        border.color: Kirigami.Theme.focusColor
-                        border.width: cell.column === 0 ? 1 : 0
-                    }
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: Kirigami.Units.smallSpacing
-                        anchors.rightMargin: Kirigami.Units.smallSpacing
-                        spacing: Kirigami.Units.smallSpacing
-                        Kirigami.Icon {
-                            visible: cell.column === 0
-                            source: cell.model.iconName || "text-x-generic"
-                            Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                            Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                        }
-                        QQC2.Label {
-                            id: label
-                            Layout.fillWidth: true
-                            elide: Text.ElideRight
-                            textFormat: cell.column <= 1 ? Text.StyledText : Text.PlainText
-                            horizontalAlignment: cell.column === 2 || cell.column === 10 ? Text.AlignRight : Text.AlignLeft
-                            color: cell.isSelected ? Kirigami.Theme.highlightedTextColor
-                                 : (cell.model.offline ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.textColor)
-                            text: {
-                                if (!cell.model.loaded) return ""
-                                const v = cell.model.value
-                                if (cell.column <= 1) return cell.model.html || ""
-                                if (cell.column === 2) return v < 0 ? "" : Qt.locale().formattedDataSize(v, 1, Locale.DataSizeTraditionalFormat)
-                                if (Columns.isDate(cell.column))
-                                    return v < 0 ? "" : new Date(v * 1000).toLocaleString(Qt.locale(), Locale.ShortFormat)
-                                return cell.model.display || ""
-                            }
-                        }
-                    }
-
-                    // Drag the selection (or this row) out to other applications.
-                    Drag.dragType: Drag.Automatic
-                    Drag.supportedActions: Qt.CopyAction | Qt.LinkAction
-                    Drag.mimeData: ({ "text/uri-list": dragUris })
-                    property string dragUris: ""
-                    DragHandler {
-                        id: drag
-                        target: null
-                        onActiveChanged: {
-                            if (active) {
-                                if (!cell.isSelected) root.setCurrent(cell.row, 0)
-                                cell.dragUris = root.model.uriList()
-                                cell.Drag.active = true
-                            } else {
-                                cell.Drag.active = false
-                            }
-                        }
-                    }
-
-                    TapHandler {
-                        acceptedButtons: Qt.LeftButton
-                        onTapped: (point, button) => {
-                            table.forceActiveFocus()
-                            const ctrl = point.modifiers & Qt.ControlModifier
-                            const shift = point.modifiers & Qt.ShiftModifier
-                            root.setCurrent(cell.row, ctrl && shift ? 3 : shift ? 2 : ctrl ? 1 : 0)
-                        }
-                        onDoubleTapped: root.open(false)
-                    }
-                    TapHandler {
-                        acceptedButtons: Qt.RightButton
-                        onTapped: {
-                            table.forceActiveFocus()
+                // Drag the selection (or this row) out to other applications.
+                Drag.dragType: Drag.Automatic
+                Drag.supportedActions: Qt.CopyAction | Qt.LinkAction
+                Drag.mimeData: ({ "text/uri-list": dragUris })
+                property string dragUris: ""
+                DragHandler {
+                    id: drag
+                    target: null
+                    onActiveChanged: {
+                        if (active) {
                             if (!cell.isSelected) root.setCurrent(cell.row, 0)
-                            else root.currentRow = cell.row
-                            contextMenu.popup()
+                            cell.dragUris = root.model.uriList()
+                            cell.Drag.active = true
+                        } else {
+                            cell.Drag.active = false
                         }
                     }
                 }
 
-                QQC2.ScrollBar.vertical: QQC2.ScrollBar {}
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onTapped: (point, button) => {
+                        table.forceActiveFocus()
+                        const ctrl = point.modifiers & Qt.ControlModifier
+                        const shift = point.modifiers & Qt.ShiftModifier
+                        root.setCurrent(cell.row, ctrl && shift ? 3 : shift ? 2 : ctrl ? 1 : 0)
+                    }
+                    onDoubleTapped: root.open(false)
+                }
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: {
+                        table.forceActiveFocus()
+                        if (!cell.isSelected) root.setCurrent(cell.row, 0)
+                        else root.currentRow = cell.row
+                        contextMenu.popup()
+                    }
+                }
+            }
 
-                Keys.onPressed: event => {
-                    const ctrl = event.modifiers & Qt.ControlModifier
-                    const shift = event.modifiers & Qt.ShiftModifier
-                    const alt = event.modifiers & Qt.AltModifier
-                    const page = Math.max(1, Math.floor(table.height / (Kirigami.Units.gridUnit * 1.5)) - 1)
-                    // Moving: Shift extends the selection, Ctrl moves without selecting.
-                    const mode = shift ? 2 : (ctrl ? -1 : 0)
-                    let target = -1
-                    switch (event.key) {
-                    case Qt.Key_Up: target = Math.max(0, root.currentRow - 1); break
-                    case Qt.Key_Down: target = Math.min(root.model.total - 1, root.currentRow + 1); break
-                    case Qt.Key_PageUp: target = Math.max(0, root.currentRow - page); break
-                    case Qt.Key_PageDown: target = Math.min(root.model.total - 1, root.currentRow + page); break
-                    case Qt.Key_Home: target = 0; break
-                    case Qt.Key_End: target = root.model.total - 1; break
-                    }
-                    if (target >= 0) {
-                        if (event.key === Qt.Key_Up && root.currentRow === 0 && !shift) {
-                            root.searchFocusRequested()
-                        } else {
-                            root.setCurrent(target, mode)
-                        }
-                        event.accepted = true
-                        return
-                    }
-                    if (event.key === Qt.Key_Space && ctrl) {
-                        root.model.select(root.currentRow, 1)
-                    } else if (event.key === Qt.Key_A && ctrl) {
-                        root.model.selectAll()
-                    } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && alt) {
-                        propertiesDialog.show(root.currentRow)
-                    } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                        if (ctrl) root.showInFolder()
-                        else root.open(false)
-                    } else if (event.key === Qt.Key_C && ctrl && shift) {
-                        root.copy(true)
-                    } else if (event.key === Qt.Key_C && ctrl) {
-                        root.copy(false)
-                    } else if (event.key === Qt.Key_F2) {
-                        renameDialog.show(root.currentRow)
-                    } else if (event.key === Qt.Key_Delete && shift) {
-                        deleteDialog.open()
-                    } else if (event.key === Qt.Key_Delete) {
-                        root.model.trashSelected()
-                    } else if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && shift)) {
-                        root.openContextMenu()
-                    } else if (event.key === Qt.Key_Escape) {
-                        root.model.clearSelection()
+            QQC2.ScrollBar.vertical: QQC2.ScrollBar {}
+            QQC2.ScrollBar.horizontal: QQC2.ScrollBar {}
+
+            Keys.onPressed: event => {
+                const ctrl = event.modifiers & Qt.ControlModifier
+                const shift = event.modifiers & Qt.ShiftModifier
+                const alt = event.modifiers & Qt.AltModifier
+                const page = Math.max(1, Math.floor(table.height / (Kirigami.Units.gridUnit * 1.5)) - 1)
+                // Moving: Shift extends the selection, Ctrl moves without selecting.
+                const mode = shift ? 2 : (ctrl ? -1 : 0)
+                let target = -1
+                switch (event.key) {
+                case Qt.Key_Up: target = Math.max(0, root.currentRow - 1); break
+                case Qt.Key_Down: target = Math.min(root.model.total - 1, root.currentRow + 1); break
+                case Qt.Key_PageUp: target = Math.max(0, root.currentRow - page); break
+                case Qt.Key_PageDown: target = Math.min(root.model.total - 1, root.currentRow + page); break
+                case Qt.Key_Home: target = 0; break
+                case Qt.Key_End: target = root.model.total - 1; break
+                }
+                if (target >= 0) {
+                    if (event.key === Qt.Key_Up && root.currentRow === 0 && !shift) {
                         root.searchFocusRequested()
                     } else {
-                        return
+                        root.setCurrent(target, mode)
                     }
                     event.accepted = true
+                    return
                 }
+                if (event.key === Qt.Key_Space && ctrl) {
+                    root.model.select(root.currentRow, 1)
+                } else if (event.key === Qt.Key_A && ctrl) {
+                    root.model.selectAll()
+                } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && alt) {
+                    propertiesDialog.show(root.currentRow)
+                } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    if (ctrl) root.showInFolder()
+                    else root.open(false)
+                } else if (event.key === Qt.Key_C && ctrl && shift) {
+                    root.copy(true)
+                } else if (event.key === Qt.Key_C && ctrl) {
+                    root.copy(false)
+                } else if (event.key === Qt.Key_F2) {
+                    renameDialog.show(root.currentRow)
+                } else if (event.key === Qt.Key_Delete && shift) {
+                    deleteDialog.open()
+                } else if (event.key === Qt.Key_Delete) {
+                    root.model.trashSelected()
+                } else if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && shift)) {
+                    root.openContextMenu()
+                } else if (event.key === Qt.Key_Escape) {
+                    root.model.clearSelection()
+                    root.searchFocusRequested()
+                } else {
+                    return
+                }
+                event.accepted = true
             }
         }
     }

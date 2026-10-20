@@ -41,3 +41,31 @@ if command -v dbus-run-session > /dev/null; then
   ' "$BIN" "$OUT"
   echo "saved $OUT/second-instance.png"
 fi
+
+# Large result sets: the window has to go idle with a modest footprint (three launches). This
+# is a smoke test: the table once built a row for every result (hundreds of MiB, a busy main
+# thread) when results arrived before the first layout settled, a race seen in release builds
+# that this debug-build check doesn’t reliably reproduce.
+mkdir -p "$HOME/many"
+(cd "$HOME/many" && seq 1 70000 | sed 's/^/f/' | xargs touch)
+for _ in $(seq 1 100); do
+  n=$("$BIN/fossick" --socket "$FOSSICK_SOCKET" --count '' 2> /dev/null || echo 0)
+  [ "$n" -ge 70000 ] && break
+  sleep 0.2
+done
+for i in 1 2 3; do
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent "$BIN/fossick-qt" --search "" > /dev/null 2>&1 &
+  pid=$!
+  sleep 3
+  t0=$(awk '{print $14 + $15}' "/proc/$pid/stat")
+  sleep 2
+  t1=$(awk '{print $14 + $15}' "/proc/$pid/stat")
+  rss=$(awk '/VmRSS/ {print int($2 / 1024)}' "/proc/$pid/status")
+  kill "$pid"
+  wait "$pid" 2> /dev/null || true
+  echo "large result set, launch $i: $((t1 - t0)) CPU ticks in 2 s when idle, ${rss} MiB"
+  if [ $((t1 - t0)) -gt 50 ] || [ "$rss" -gt 250 ]; then
+    echo "FAIL: the window doesn't go idle with $n results"
+    exit 1
+  fi
+done
