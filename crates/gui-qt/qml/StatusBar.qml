@@ -19,8 +19,8 @@ QQC2.ToolBar {
         QQC2.Label {
             text: bar.model.busy ? qsTr("Searching…")
                 : bar.selectedCount > 0
-                    ? qsTr("%L1 objects, %L2 selected").arg(bar.model.total).arg(bar.selectedCount)
-                    : qsTr("%L1 objects").arg(bar.model.total)
+                    ? qsTr("%Ln object(s), %L1 selected", "", bar.model.total).arg(bar.selectedCount)
+                    : qsTr("%Ln object(s)", "", bar.model.total)
         }
         QQC2.Label {
             visible: !bar.model.busy && bar.model.connected

@@ -12,7 +12,7 @@ Status markers: ✅ implemented and tested · 🚧 in progress · ⏳ planned.
 ```
                        ┌──────────── /run/fossick/socket (AF_UNIX, postcard frames) ───────────┐
  fossick-qt ─┐         │                                                                        │
- fossick-gtk ┼─ fossick-client (Rust + C ABI) ─────────────────────────────────▶ fossickd (system, root-equivalent caps)
+ fossick-gtk ┼─ fossick-client (Rust) ──────────────────────────────────────────▶ fossickd (system, root-equivalent caps)
  fossick CLI ┘         │                                                    or fossickd --user (unprivileged, $HOME)
                        └────────────────────────────────────────────────────────────────────────┘
 fossickd = mounts + volumes + scanner (fossick-scan) + watchers + writer thread + query workers
@@ -21,14 +21,15 @@ fossickd = mounts + volumes + scanner (fossick-scan) + watchers + writer thread 
 
 | Crate | Path | Role | Status |
 |---|---|---|---|
-| `fossick-core` | `crates/core` | index structures, query parser and evaluator, matcher, sorting, persistence. Pure logic, with the filesystem behind traits | 🚧 Phase 1 |
-| `fossick-scan` | `crates/scan` | parallel `getdents64` + `statx` walker; mount and volume helpers | 🚧 Phase 1 (v0), Phase 2 (full) |
-| `fossick` | `crates/cli` | CLI (the `es.exe` equivalent): in-process `--local` mode now, socket client in Phase 2 | 🚧 Phase 1 |
-| `fossick-bench` | `crates/bench` | synthetic tree and index generator, criterion benchmarks, report tool | 🚧 Phase 1 |
-| `fossick-proto` | `crates/proto` | IPC messages and framing | ⏳ Phase 2 |
-| `fossickd` | `crates/daemon` | system service (also `--user` mode) | ⏳ Phase 2 |
-| `fossick-client` | `crates/client` | Rust client and C ABI (`fossick.h` via cbindgen) | ⏳ Phase 2 |
-| `fossick-qt` | `crates/gui-qt` | Qt 6 + QML + Kirigami frontend (cxx-qt) | ⏳ Phase 3 |
+| `fossick-core` | `crates/core` | index structures, query parser and evaluator, matcher, sorting, persistence. Pure logic, with the filesystem behind traits | ✅ Phase 1 |
+| `fossick-scan` | `crates/scan` | parallel `getdents64` + `statx` walker; mount and volume helpers; name patterns | ✅ Phases 1–2 |
+| `fossick` | `crates/cli` | CLI (the `es.exe` equivalent): over the socket or in-process with `--local`; also starts the GUI (`--gui`, `--toggle`, `--settings`) | ✅ Phases 1–3 |
+| `fossick-bench` | `crates/bench` | synthetic tree and index generator, criterion benchmarks, report tool | ✅ Phase 1 |
+| `fossick-proto` | `crates/proto` | IPC messages and framing | ✅ Phase 2 |
+| `fossickd` | `crates/daemon` | system service (also `--user` mode) | ✅ Phase 2 |
+| `fossick-client` | `crates/client` | Rust client (the C ABI is deferred, see TODO) | ✅ Phase 2 |
+| `fossick-ui` | `crates/ui` | frontend logic without a toolkit: daemon session, row cache, columns, filters, settings, history, desktop actions, single instance, global shortcut, daemon settings | ✅ Phase 3 |
+| `fossick-qt` | `crates/gui-qt` | Qt 6 + QML + Kirigami frontend (cxx-qt) | ✅ Phase 3 |
 | `fossick-gtk` | `crates/gui-gtk` | GTK4 + libadwaita frontend (gtk4-rs) | ⏳ Phase 5 |
 
 Frontends are thin. All searching happens in `fossickd`. The one exception is the CLI’s `--local`
@@ -441,13 +442,26 @@ startup scans; see BENCHMARKS.md for why.
 
 ## 5. Frontends (Phases 3 and 5)
 
-- The shared design lives in `docs/UI.md` (⏳).
-- Both GUIs are thin. `fossick-client` handles connect and autospawn, paging, push notifications,
-  run reporting, the freedesktop trash, and the portal and D-Bus helpers: OpenURI,
-  `FileManager1.ShowItems`, GlobalShortcuts, and `org.freedesktop.Application` activation
-  (forwarding `XDG_ACTIVATION_TOKEN` for `fossick --toggle` on Wayland).
-- Qt: cxx-qt + QML + Kirigami.
-- GTK: gtk4-rs + libadwaita, with `GtkColumnView` over a lazy `GListModel`.
+The design, keyboard shortcuts, settings and desktop integration are described in
+[`docs/UI.md`](UI.md).
+
+- Both GUIs are thin. Everything that doesn’t need a toolkit lives in `fossick-ui`:
+  - a session thread per tab that sends queries (newest wins), fetches row pages on demand and
+    turns daemon pushes into events;
+  - a row cache (pages of 200, LRU) and a selection kept as row ranges, pinned to paths for
+    small result sets;
+  - the desktop actions: the OpenURI portal, `FileManager1.ShowItems`, the freedesktop trash,
+    rename with `RENAME_NOREPLACE`, and properties;
+  - the single-instance D-Bus service;
+  - the GlobalShortcuts portal client;
+  - the frontend chooser;
+  - reading and applying the daemon’s `[index]` settings.
+- Qt ✅: cxx-qt 0.10 bridges a `QAbstractTableModel` (`SearchModel`) and an `App` singleton
+  to QML/Kirigami. A little C++ (`cpp/native.cpp`) covers what has no binding: the
+  application object, style choice, colour scheme, clipboard, MIME icons, translations and test
+  screenshots. The C ABI planned for frontends wasn’t needed.
+- GTK ⏳: gtk4-rs + libadwaita, with `GtkColumnView` over a lazy `GListModel`, on the same
+  `fossick-ui`.
 
 ## 6. Deviations from the specification
 
@@ -467,8 +481,8 @@ startup scans; see BENCHMARKS.md for why.
    modelled.
 7. **atime** is optional and not tracked live.
 8. **Benchmark CI gate** uses instruction counts; wall-clock numbers are reported, not gated.
-9. **Qt/Kirigami** needs Qt ≥ 6.6 + KF6, which rules out Ubuntu 24.04-based distros (they get the GTK
-   GUI).
+9. **Qt/Kirigami** needs Qt ≥ 6.8 + KF6 (planned: 6.6). 6.8 brings the colour-scheme override and
+   `Accessible.announce`. That rules out Ubuntu 24.04-based distros, which get the GTK GUI.
 10. **User mode** is the same daemon run unprivileged, not an indexer embedded in each GUI or CLI
     process.
 11. **Volumes without a UUID** get fallback identities.
@@ -485,6 +499,16 @@ startup scans; see BENCHMARKS.md for why.
     libblkid fallback (containers without udev) isn’t implemented.
 17. **Scanner threads** are not chosen per device type yet (`queue/rotational`); one setting
     applies to all volumes.
+18. **Single instance** uses Fossick’s own session-bus interface
+    (`io.github.oreo1298.Fossick1`: Toggle, Activate, NewWindow, Search, Settings) instead of
+    `org.freedesktop.Application`. The app isn’t D-Bus activatable, and the extra methods carry
+    the search text and the activation token.
+19. **The global shortcut is off by default.** Turning it on makes the desktop show a
+    confirmation dialog, so it waits until the user asks. `fossick --toggle` is the fallback for
+    desktops without the GlobalShortcuts portal.
+20. **Admin actions** from the GUI (index settings of the system daemon, rescans) run the CLI
+    through `pkexec` with a polkit action for `/usr/bin/fossick`. The daemon itself still
+    accepts these requests from root only, so it needs no polkit client.
 
 ## 7. Phases
 
@@ -492,7 +516,7 @@ startup scans; see BENCHMARKS.md for why.
 |---|---|---|
 | 1 | Core (index, persistence, full query parser, matcher, sorting), in-process CLI, benchmark harness | ✅ |
 | 2 | Daemon: mounts, universal scanner, fanotify/inotify/polling, reconciliation, IPC, permission filtering, systemd unit, CLI over the socket, user mode | ✅ (C ABI deferred, see TODO) |
-| 3 | Qt/Kirigami GUI | ⏳ |
+| 3 | Qt/Kirigami GUI | ✅ |
 | 4 | Packaging (Arch first, then deb, rpm, tarball), README, release CI | ⏳ |
 | 5 | GTK4/libadwaita GUI | ⏳ |
 | 6 | Upgrades: preview, KRunner, GNOME provider, fuzzy/frecency, duplicates, tags, EFU, content index, HTTP, more distros | ⏳ |

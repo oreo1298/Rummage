@@ -6,6 +6,7 @@ pub mod columns;
 pub mod daemon_config;
 pub mod desktop;
 pub mod filters;
+pub mod history;
 pub mod instance;
 pub mod launcher;
 pub mod rows;

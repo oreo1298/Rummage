@@ -91,6 +91,7 @@ QQC2.ApplicationWindow {
             Kirigami.FormLayout {
                 width: parent.width
                 QQC2.ComboBox {
+                    implicitContentWidthPolicy: QQC2.ComboBox.WidestText
                     Kirigami.FormData.label: qsTr("Colors:")
                     readonly property var values: ["system", "light", "dark"]
                     model: [qsTr("Follow the system"), qsTr("Light"), qsTr("Dark")]
@@ -101,6 +102,7 @@ QQC2.ApplicationWindow {
                     }
                 }
                 QQC2.ComboBox {
+                    implicitContentWidthPolicy: QQC2.ComboBox.WidestText
                     Kirigami.FormData.label: qsTr("Interface for “fossick --gui”:")
                     readonly property var values: ["auto", "qt", "gtk"]
                     model: [qsTr("Match the desktop"), qsTr("Qt (KDE)"), qsTr("GTK (GNOME)")]
@@ -126,6 +128,31 @@ QQC2.ApplicationWindow {
                     text: qsTr("Show hidden files and folders")
                     checked: win.settings.show_hidden
                     onToggled: win.save("show_hidden", checked)
+                }
+                Item { Kirigami.FormData.isSection: true }
+                // Every column but Name, which is always shown.
+                GridLayout {
+                    Kirigami.FormData.label: qsTr("Columns:")
+                    Kirigami.FormData.labelAlignment: Qt.AlignTop
+                    columns: 3
+                    columnSpacing: Kirigami.Units.largeSpacing
+                    rowSpacing: 0
+                    Repeater {
+                        model: Columns.keys.length - 1
+                        delegate: QQC2.CheckBox {
+                            required property int index
+                            readonly property int logical: index + 1
+                            readonly property var column: win.settings.columns.find(c => c.column === Columns.keys[logical])
+                            text: Columns.title(logical)
+                            checked: column ? column.visible : false
+                            onToggled: {
+                                const s = JSON.parse(App.settingsJson)
+                                const c = s.columns.find(c => c.column === Columns.keys[logical])
+                                if (c) c.visible = checked
+                                App.saveSettings(JSON.stringify(s))
+                            }
+                        }
+                    }
                 }
                 Item { Kirigami.FormData.isSection: true }
                 RowLayout {
@@ -186,25 +213,6 @@ QQC2.ApplicationWindow {
                     onToggled: win.save("regex", checked)
                 }
                 Item { Kirigami.FormData.isSection: true }
-                // Every column but Name, which is always shown.
-                Repeater {
-                    model: Columns.keys.length - 1
-                    delegate: QQC2.CheckBox {
-                        required property int index
-                        readonly property int logical: index + 1
-                        readonly property var column: win.settings.columns.find(c => c.column === Columns.keys[logical])
-                        Kirigami.FormData.label: index === 0 ? qsTr("Columns:") : ""
-                        text: Columns.title(logical)
-                        checked: column ? column.visible : false
-                        onToggled: {
-                            const s = JSON.parse(App.settingsJson)
-                            const c = s.columns.find(c => c.column === Columns.keys[logical])
-                            if (c) c.visible = checked
-                            App.saveSettings(JSON.stringify(s))
-                        }
-                    }
-                }
-                Item { Kirigami.FormData.isSection: true }
                 ColumnLayout {
                     Kirigami.FormData.label: qsTr("Filters:")
                     Kirigami.FormData.labelAlignment: Qt.AlignTop
@@ -257,6 +265,64 @@ QQC2.ApplicationWindow {
                             win.setFilters(win.settings.custom_filters.concat([{ name: qsTr("Filter %1").arg(n), query: "" }]))
                         }
                     }
+                }
+                Item { Kirigami.FormData.isSection: true }
+                ColumnLayout {
+                    Kirigami.FormData.label: qsTr("Bookmarks:")
+                    Kirigami.FormData.labelAlignment: Qt.AlignTop
+                    Layout.fillWidth: true
+                    QQC2.Label {
+                        visible: win.settings.bookmarks.length === 0
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        color: Kirigami.Theme.disabledTextColor
+                        text: qsTr("None yet. Ctrl+D in a search window saves the current search.")
+                    }
+                    Repeater {
+                        model: win.settings.bookmarks
+                        delegate: RowLayout {
+                            required property int index
+                            required property var modelData
+                            Layout.fillWidth: true
+                            QQC2.TextField {
+                                Layout.preferredWidth: Kirigami.Units.gridUnit * 8
+                                text: modelData.name
+                                placeholderText: qsTr("Name")
+                                Accessible.name: qsTr("Bookmark %1 name").arg(index + 1)
+                                onEditingFinished: if (text !== modelData.name) {
+                                    const list = win.settings.bookmarks.map(b => Object.assign({}, b))
+                                    list[index].name = text
+                                    win.save("bookmarks", list)
+                                }
+                            }
+                            QQC2.Label {
+                                Layout.fillWidth: true
+                                text: modelData.search
+                                textFormat: Text.PlainText
+                                elide: Text.ElideRight
+                                color: Kirigami.Theme.disabledTextColor
+                            }
+                            QQC2.ToolButton {
+                                icon.name: "list-remove"
+                                text: qsTr("Remove")
+                                display: QQC2.AbstractButton.IconOnly
+                                onClicked: win.save("bookmarks", win.settings.bookmarks.filter((b, i) => i !== index))
+                            }
+                        }
+                    }
+                }
+                Item { Kirigami.FormData.isSection: true }
+                QQC2.CheckBox {
+                    Kirigami.FormData.label: qsTr("History:")
+                    text: qsTr("Remember recent searches (Alt+Down in the search field)")
+                    checked: win.settings.remember_history
+                    onToggled: win.save("remember_history", checked)
+                }
+                QQC2.Button {
+                    icon.name: "edit-clear-history"
+                    text: qsTr("Clear Recent Searches")
+                    enabled: JSON.parse(App.historyJson).length > 0
+                    onClicked: App.clearHistory()
                 }
             }
         }
@@ -378,6 +444,7 @@ QQC2.ApplicationWindow {
                         onToggled: win.editIndex("keep_offline", checked)
                     }
                     QQC2.ComboBox {
+                    implicitContentWidthPolicy: QQC2.ComboBox.WidestText
                         Kirigami.FormData.label: qsTr("Watch for changes with:")
                         readonly property var values: ["auto", "fanotify", "inotify", "poll"]
                         model: [qsTr("Best available"), "fanotify", "inotify", qsTr("Periodic checks")]

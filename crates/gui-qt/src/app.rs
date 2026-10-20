@@ -24,6 +24,8 @@ pub mod qobject {
         #[qproperty(bool, admin_busy)]
         /// The settings page `--settings PAGE` asked for ("" = none).
         #[qproperty(QString, open_settings, READ, CONSTANT)]
+        /// Recent searches, newest first, as a JSON array of strings.
+        #[qproperty(QString, history_json)]
         type App = super::AppRust;
     }
 
@@ -92,16 +94,25 @@ pub mod qobject {
         /// Puts `text` on the clipboard.
         #[qinvokable]
         fn copy_text(self: &App, text: &QString);
+
+        /// Adds a search to the recent searches (if the settings keep them).
+        #[qinvokable]
+        fn remember_search(self: Pin<&mut App>, text: &QString);
+
+        /// Forgets every recent search.
+        #[qinvokable]
+        fn clear_history(self: Pin<&mut App>);
     }
 }
 
 use std::pin::Pin;
 use std::sync::Mutex;
 
-use cxx_qt::{CxxQtThread, Threading};
+use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use fossick_ui::columns::Column;
 use fossick_ui::daemon_config::{self, IndexSettings};
+use fossick_ui::history::History;
 use fossick_ui::instance::{BUS_NAME, Command};
 use fossick_ui::settings::{Settings, Theme};
 use fossick_ui::shortcuts::{GlobalShortcut, Status};
@@ -116,6 +127,8 @@ pub struct AppRust {
     shortcut_detail: QString,
     admin_busy: bool,
     open_settings: QString,
+    history_json: QString,
+    history: History,
 }
 
 impl Default for AppRust {
@@ -129,6 +142,8 @@ impl Default for AppRust {
             shortcut_detail: QString::default(),
             admin_busy: false,
             open_settings: QString::from(&*settings_page()),
+            history_json: QString::from("[]"),
+            history: History::default(),
         }
     }
 }
@@ -200,6 +215,12 @@ impl cxx_qt::Initialize for qobject::App {
             state.0 = Some(thread);
         }
         let s = Settings::load();
+        if s.remember_history {
+            let history = History::load();
+            let json = serde_json::to_string(&history.entries).unwrap_or_default();
+            self.as_mut().rust_mut().history = history;
+            self.as_mut().set_history_json(QString::from(&*json));
+        }
         if s.global_shortcut {
             self.as_mut()
                 .set_global_shortcut(true, &QString::from(&*s.shortcut));
@@ -362,6 +383,34 @@ impl qobject::App {
 
     pub fn copy_text(&self, text: &QString) {
         native::set_clipboard_text(text);
+    }
+
+    pub fn remember_search(mut self: Pin<&mut Self>, text: &QString) {
+        if !Settings::load().remember_history {
+            return;
+        }
+        let text = text.to_string();
+        if self.history.entries.first() == Some(&text) {
+            return;
+        }
+        if !self.as_mut().rust_mut().history.add(&text) {
+            return;
+        }
+        if let Err(e) = self.history.save() {
+            eprintln!("fossick-qt: cannot save the search history: {e}");
+        }
+        let json = serde_json::to_string(&self.history.entries).unwrap_or_default();
+        self.set_history_json(QString::from(&*json));
+    }
+
+    pub fn clear_history(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().history = History::default();
+        if let Some(p) = History::path()
+            && let Err(e) = History::clear_at(&p)
+        {
+            eprintln!("fossick-qt: cannot remove {}: {e}", p.display());
+        }
+        self.set_history_json(QString::from("[]"));
     }
 
     pub fn column_key(&self, column: i32) -> QString {

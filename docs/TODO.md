@@ -38,16 +38,16 @@ feature is not listed here and not marked ✅ in `docs/ARCHITECTURE.md`, treat i
 - [ ] `filelist:`, `filelistfilename:` (EFU support, Phase 6).
 - [ ] `shell:` (map to XDG user directories).
 
-## Client features from the spec not started yet
+## Client features
 
-- [ ] Bookmarks, saved filters and search history: client side, with the GUI (Phase 3); CLI access
-  later.
-- [ ] Global hotkey, `fossick --toggle` (Phase 3).
+- [x] Bookmarks, custom filters and search history in the GUI (Phase 3).
+- [ ] Bookmarks and history from the CLI.
+- [x] Global shortcut (GlobalShortcuts portal) and `fossick --toggle` (Phase 3).
 
 ## Left over from Phase 2 (daemon)
 
-- [ ] **C ABI for `fossick-client`** (cbindgen header + C smoke test). Deferred to Phase 3, where
-  the Qt frontend decides between cxx-qt and the C ABI.
+- [ ] **C ABI for `fossick-client`** (cbindgen header + C smoke test). The Qt frontend uses
+  cxx-qt and didn’t need it; it remains useful for third-party clients (Phase 6).
 - [ ] **Incremental live results:** live queries are re-run in full after a publish (≤ 10 Hz)
   instead of splicing the change set into the sorted result.
 - [ ] **Incremental visibility maps:** a non-root user’s visibility is recomputed for every new
@@ -55,10 +55,13 @@ feature is not listed here and not marked ✅ in `docs/ARCHITECTURE.md`, treat i
 - [ ] **libblkid fallback** for volume UUIDs where `/dev/disk/by-uuid` doesn’t exist.
 - [ ] **Scanner threads per device type** (`queue/rotational`).
 - [ ] **`rc:` / recent changes**: needs a change log in the daemon.
-- [ ] **Polkit** for admin requests (rescan) from non-root users; today only root may rescan.
-- [ ] **btrfs + inotify:** CI runs 17 and 18 each lost one or a few files created right after a
-  new directory appeared (every other filesystem and watcher passes; fanotify on btrfs passes).
-  The storm test now logs exact-path traces on failure to find out why.
+- [x] **Polkit** for admin requests: the GUI runs `fossick --install-config` / `--rescan` through
+  `pkexec` (action `io.github.oreo1298.Fossick.admin`). The daemon still accepts them from root
+  only.
+- [x] **btrfs + inotify:** CI runs 17 and 18 each lost a few files created right after a new
+  directory appeared. Two causes were fixed: a race between adding a watch and recording it,
+  and events of a stale watch being dropped (now they wait for a rescan). Green since CI run 25;
+  the storm test keeps its exact-path traces in case it comes back.
 - [ ] **UUIDs without udev:** `FS_IOC_GETFSUUID` (Linux 6.5+) could identify volumes before udev
   publishes `/dev/disk/by-uuid`; until then the fallback identity is matched by mount point.
 - [ ] **Network filesystems** (polling) have no automated test yet.
@@ -66,6 +69,22 @@ feature is not listed here and not marked ✅ in `docs/ARCHITECTURE.md`, treat i
 - [ ] **Event-storm benchmarks with the daemon** (`fossick-bench-report storm` measures the core
   writer only): end-to-end latency from a filesystem change to a visible result.
 
-## Phases 3–6
+## Left over from Phase 3 (Qt GUI)
 
-Not started. See `docs/ARCHITECTURE.md` §7: GUIs, packaging and the Phase 6 upgrades.
+- [ ] **Real-desktop checks:** the GUI is tested offscreen only (screenshots in CI). Still to
+  try on Plasma and GNOME sessions: Orca, the GlobalShortcuts portal’s dialog, the tray
+  (StatusNotifierItem), drag and drop into file managers, Wayland activation with `--toggle`, and
+  fractional scaling.
+- [ ] **Translations:** only the English plural forms exist; messages from Rust code (daemon
+  errors, action failures) aren’t translatable yet.
+- [ ] **Natural sort** in the GUI follows the daemon (see “Locale-aware collation” above).
+- [ ] **Preview pane**, **fuzzy matching** and **frecency** (Phase 6; no settings for them yet).
+- [ ] **Index settings** rewrite `fossickd.toml` without its comments (TOML round trip). A
+  comment-preserving editor (`toml_edit`) would keep hand-written notes.
+- [ ] **Packaging** must install the desktop file, icon and polkit policy, and depend on the
+  Breeze icons (Phase 4). The polkit action names `/usr/bin/fossick`, so other prefixes need
+  the path rewritten.
+
+## Phases 4–6
+
+Not started. See `docs/ARCHITECTURE.md` §7: packaging, the GTK GUI and the Phase 6 upgrades.

@@ -3,7 +3,7 @@
 Instant, Everything-style file-name search for Linux. Fossick indexes every file and folder name
 on every mounted filesystem, finds them as you type, and stays current in real time.
 
-> **Status: Phases 1–2 of 6 complete. Nothing is packaged yet.**
+> **Status: Phases 1–3 of 6 complete. Nothing is packaged yet.**
 >
 > What works today:
 >
@@ -11,11 +11,13 @@ on every mounted filesystem, finds them as you type, and stays current in real t
 > - the daemon `fossickd`: indexes every mounted filesystem, keeps the index current in real
 >   time (fanotify, inotify or polling), and filters every result by the asking user’s
 >   permissions;
-> - the `fossick` command-line client (through the daemon, or in-process with `--local`).
+> - the `fossick` command-line client (through the daemon, or in-process with `--local`);
+> - the Qt/Kirigami search window `fossick-qt` (Qt ≥ 6.8 and KDE Frameworks 6).
 >
-> The GUIs and packages are planned. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the
-> design and plan, [`docs/TODO.md`](docs/TODO.md) for what is missing, and
-> [`docs/SECURITY.md`](docs/SECURITY.md) for the permission model.
+> The GTK window and the packages are planned. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+> for the design and plan, [`docs/UI.md`](docs/UI.md) for the search window,
+> [`docs/TODO.md`](docs/TODO.md) for what is missing, and [`docs/SECURITY.md`](docs/SECURITY.md)
+> for the permission model.
 
 Fossick is an independent project, not affiliated with voidtools. It reimplements the behaviour
 and search syntax of voidtools Everything for Linux.
@@ -69,6 +71,23 @@ target/release/fossick --local ~ 'ext:pdf dm:thisyear'
 target/release/fossick --local / --stats --count ''
 ```
 
+### The search window (Qt)
+
+Needs Qt ≥ 6.8 with Qt Quick Controls, KDE Frameworks 6 Kirigami and the Breeze icons (for
+example on Arch, Fedora 41+, Debian 13 or Ubuntu 25.04+; package names are in the `gui-qt` job
+of [`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+
+```sh
+cargo build --release -p fossick-qt
+sudo install -m 755 target/release/fossick-qt /usr/local/bin/
+fossick --gui                  # or: fossick --gui 'ext:pdf report'
+```
+
+To show and hide the window with a key, turn on Settings → Shortcut (desktops with the
+GlobalShortcuts portal: KDE Plasma 6, GNOME 48+), or bind `fossick --toggle` in your desktop’s
+keyboard settings. [`docs/UI.md`](docs/UI.md) has the keyboard shortcuts, the settings and the
+setup for each desktop.
+
 ### Command-line options
 
 | Option | Meaning |
@@ -89,7 +108,12 @@ target/release/fossick --local / --stats --count ''
 | `--atime` | also index access times (`--local`) |
 | `--status` | show the daemon’s volumes, watch methods and entry counts |
 | `--rescan [MOUNT]` | ask the daemon to rescan a volume, or every volume without MOUNT (root for the system daemon) |
+| `--reload` | make the daemon re-read its configuration (root for the system daemon) |
+| `--install-config FILE` | install FILE as `/etc/fossick/fossickd.toml` and reload; the old file is restored if the daemon rejects it (root) |
 | `--socket PATH`, `--user-daemon` | choose the daemon |
+| `--gui [QUERY]` | open the search window, or bring the running one forward |
+| `--toggle` | show the search window, or hide it if it is in front (for a keyboard shortcut) |
+| `--settings` | open the search window’s settings |
 
 Exit status:
 
@@ -101,6 +125,8 @@ Exit status:
 | 3 | daemon unavailable |
 | 4 | invalid query |
 | 5 | I/O error |
+| 6 | no search window installed (`--gui`, `--toggle`, `--settings`) |
+| 7 | the daemon rejected its configuration file |
 
 Paths are printed as the exact bytes on disk. JSON output adds `path_hex` for names that aren’t
 valid UTF-8.
@@ -130,8 +156,8 @@ version:
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --exclude fossick-qt --all-targets -- -D warnings
+cargo test --workspace --exclude fossick-qt     # fossick-qt needs Qt ≥ 6.8, see CLAUDE.md
 cargo run --release -p fossick-bench --bin fossick-bench-report -- query --entries 1000000
 ```
 

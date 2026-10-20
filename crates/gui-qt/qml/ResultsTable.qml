@@ -16,6 +16,21 @@ FocusScope {
     property int currentRow: -1
 
     signal searchFocusRequested()
+    // A result was opened, shown or copied (the search goes into the recent searches).
+    signal resultUsed()
+
+    function open(withChooser) {
+        root.model.openSelected(withChooser)
+        resultUsed()
+    }
+    function showInFolder() {
+        root.model.showSelectedInFolder()
+        resultUsed()
+    }
+    function copy(fullPath) {
+        root.model.copySelected(fullPath)
+        resultUsed()
+    }
 
     function focusTable() {
         if (root.model.total > 0 && currentRow < 0) setCurrent(0, 0)
@@ -23,9 +38,26 @@ FocusScope {
     }
     function setCurrent(row, mode) {
         if (row < 0 || row >= root.model.total) return
+        const moved = row !== currentRow
         currentRow = row
         if (mode >= 0) root.model.select(row, mode)
         table.positionViewAtRow(row, TableView.Contain)
+        if (moved && table.activeFocus) Qt.callLater(announceCurrent)
+    }
+    // Focus stays on the table while the current row moves, so tell screen readers which row
+    // it is (Qt 6.8 and later).
+    function announceCurrent() {
+        const name = root.model.nameAt(currentRow)
+        if (name === "" || typeof table.Accessible.announce !== "function") return
+        const selected = root.model.isSelected(currentRow) ? qsTr("selected") : qsTr("not selected")
+        table.Accessible.announce(qsTr("%1, %2, row %3 of %4").arg(name).arg(selected)
+            .arg(currentRow + 1).arg(root.model.total))
+    }
+    function openContextMenu() {
+        if (currentRow < 0) return
+        const rowHeight = Kirigami.Units.gridUnit * 1.5
+        contextMenu.popup(table, Kirigami.Units.gridUnit,
+                          Math.max(0, (currentRow + 1) * rowHeight - table.contentY))
     }
     function columnState(column) {
         return root.settings.columns.find(c => c.column === Columns.keys[column])
@@ -152,7 +184,9 @@ FocusScope {
                     color: isSelected ? Kirigami.Theme.highlightColor
                          : (row % 2 ? Kirigami.Theme.alternateBackgroundColor : Kirigami.Theme.backgroundColor)
                     Accessible.role: Accessible.Cell
-                    Accessible.name: label.text
+                    // Plain text: the name and path labels carry highlight markup.
+                    Accessible.name: cell.column <= 1 ? (cell.model.display || "") : label.text
+                    Accessible.selected: isSelected
 
                     Rectangle {
                         anchors.fill: parent
@@ -220,7 +254,7 @@ FocusScope {
                             const shift = point.modifiers & Qt.ShiftModifier
                             root.setCurrent(cell.row, ctrl && shift ? 3 : shift ? 2 : ctrl ? 1 : 0)
                         }
-                        onDoubleTapped: root.model.openSelected(false)
+                        onDoubleTapped: root.open(false)
                     }
                     TapHandler {
                         acceptedButtons: Qt.RightButton
@@ -267,18 +301,20 @@ FocusScope {
                     } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && alt) {
                         propertiesDialog.show(root.currentRow)
                     } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                        if (ctrl) root.model.showSelectedInFolder()
-                        else root.model.openSelected(false)
+                        if (ctrl) root.showInFolder()
+                        else root.open(false)
                     } else if (event.key === Qt.Key_C && ctrl && shift) {
-                        root.model.copySelected(true)
+                        root.copy(true)
                     } else if (event.key === Qt.Key_C && ctrl) {
-                        root.model.copySelected(false)
+                        root.copy(false)
                     } else if (event.key === Qt.Key_F2) {
                         renameDialog.show(root.currentRow)
                     } else if (event.key === Qt.Key_Delete && shift) {
                         deleteDialog.open()
                     } else if (event.key === Qt.Key_Delete) {
                         root.model.trashSelected()
+                    } else if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && shift)) {
+                        root.openContextMenu()
                     } else if (event.key === Qt.Key_Escape) {
                         root.model.clearSelection()
                         root.searchFocusRequested()
@@ -298,12 +334,12 @@ FocusScope {
 
     QQC2.Menu {
         id: contextMenu
-        QQC2.MenuItem { text: qsTr("Open"); icon.name: "document-open"; onTriggered: root.model.openSelected(false) }
-        QQC2.MenuItem { text: qsTr("Open With…"); icon.name: "document-open"; onTriggered: root.model.openSelected(true) }
-        QQC2.MenuItem { text: qsTr("Show in Folder"); icon.name: "document-open-folder"; onTriggered: root.model.showSelectedInFolder() }
+        QQC2.MenuItem { text: qsTr("Open"); icon.name: "document-open"; onTriggered: root.open(false) }
+        QQC2.MenuItem { text: qsTr("Open With…"); icon.name: "document-open"; onTriggered: root.open(true) }
+        QQC2.MenuItem { text: qsTr("Show in Folder"); icon.name: "document-open-folder"; onTriggered: root.showInFolder() }
         QQC2.MenuSeparator {}
-        QQC2.MenuItem { text: qsTr("Copy Name"); icon.name: "edit-copy"; onTriggered: root.model.copySelected(false) }
-        QQC2.MenuItem { text: qsTr("Copy Full Path"); icon.name: "edit-copy-path"; onTriggered: root.model.copySelected(true) }
+        QQC2.MenuItem { text: qsTr("Copy Name"); icon.name: "edit-copy"; onTriggered: root.copy(false) }
+        QQC2.MenuItem { text: qsTr("Copy Full Path"); icon.name: "edit-copy-path"; onTriggered: root.copy(true) }
         QQC2.MenuSeparator {}
         QQC2.MenuItem { text: qsTr("Rename…"); icon.name: "edit-rename"; enabled: root.selectedCount === 1; onTriggered: renameDialog.show(root.currentRow) }
         QQC2.MenuItem { text: qsTr("Move to Trash"); icon.name: "edit-delete"; onTriggered: root.model.trashSelected() }

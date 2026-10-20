@@ -3,6 +3,7 @@
 #include <QtCore/QLibraryInfo>
 #include <QtCore/QLocale>
 #include <QtCore/QMimeDatabase>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtCore/QTranslator>
 #include <QtQuick/QQuickWindow>
@@ -40,10 +41,19 @@ void create_application(const QString& app_name, const QString& desktop_file, co
     QApplication::setOrganizationDomain(QStringLiteral("io.github.oreo1298"));
     QApplication::setDesktopFileName(desktop_file);
     app = new QApplication(g_argc, g_argv);
-    // Without a desktop platform theme (no KDE/GNOME session) Qt falls back to hicolor, which
-    // has almost no icons: use Breeze or Adwaita when installed.
+    // Some platforms (offscreen, minimal) only look for icon themes in the resources: add the
+    // XDG icon directories.
+    QStringList paths = QIcon::themeSearchPaths();
+    for (const QString& dir : QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
+                                                        QStringLiteral("icons"),
+                                                        QStandardPaths::LocateDirectory)) {
+        if (!paths.contains(dir)) paths << dir;
+    }
+    QIcon::setThemeSearchPaths(paths);
+    // Icons the desktop's theme lacks (Adwaita has few non-symbolic ones) come from Breeze, a
+    // dependency of the packages. Without a desktop theme at all (hicolor), use Breeze outright.
+    QIcon::setFallbackThemeName(QStringLiteral("breeze"));
     if (QIcon::themeName().isEmpty() || QIcon::themeName() == QStringLiteral("hicolor")) {
-        QIcon::setFallbackThemeName(QStringLiteral("breeze"));
         QIcon::setThemeName(QStringLiteral("breeze"));
     }
     // The installed icon, else the copy built into the program.
@@ -102,7 +112,10 @@ QString mime_comment(const QString& file_name, bool is_dir) {
 
 void install_translations() {
     auto* t = new QTranslator(QCoreApplication::instance());
-    if (t->load(QLocale(), QStringLiteral("fossick"), QStringLiteral("_"), QStringLiteral(":/i18n"))) {
+    // The user's language, else English, whose file holds the plural forms of the source
+    // texts ("%n object(s)").
+    if (t->load(QLocale(), QStringLiteral("fossick"), QStringLiteral("_"), QStringLiteral(":/i18n"))
+        || t->load(QStringLiteral("fossick_en"), QStringLiteral(":/i18n"))) {
         QCoreApplication::installTranslator(t);
     } else {
         delete t;

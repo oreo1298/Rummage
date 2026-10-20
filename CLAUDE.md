@@ -26,6 +26,7 @@ cargo clippy -p fossick-qt --all-targets -- -D warnings
 cargo build -p fossick-qt -p fossickd -p fossick
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software XDG_CURRENT_DESKTOP=KDE \
   tests/gui/screenshot.sh shots target/debug              # screenshots against a user daemon
+crates/gui-qt/translations/update.sh                      # refresh .ts files after QML string changes
 ```
 
 In this sandbox (Ubuntu 24.04, Qt 6.4) the Qt GUI is built in an Ubuntu 26.04 Docker image
@@ -35,7 +36,8 @@ In this sandbox (Ubuntu 24.04, Qt 6.4) the Qt GUI is built in an Ubuntu 26.04 Do
 Crates: `core` (index, query, search, permissions, snapshots), `proto` (IPC messages), `scan`
 (walker, file handles, pruned rescans), `daemon` (`fossickd`), `client` (connect/autospawn),
 `cli` (`fossick`), `ui` (toolkit-free frontend logic: daemon session, row cache, selection,
-columns, settings, desktop actions), `gui-qt` (`fossick-qt`, cxx-qt + QML/Kirigami), `bench`.
+columns, settings, history, desktop actions, single instance, global shortcut, daemon settings),
+`gui-qt` (`fossick-qt`, cxx-qt + QML/Kirigami), `bench`. GUI design: `docs/UI.md`.
 
 Rust: edition 2024, **MSRV 1.88** (raised from the planned 1.85 because ICU4X 2.x, used for
 Unicode case folding and normalization, needs 1.88). CI checks MSRV.
@@ -84,4 +86,4 @@ Unicode case folding and normalization, needs 1.88). CI checks MSRV.
 | atime | optional column, off by default; `da:` approximate |
 | Timestamps | file times stored as u32 seconds (escape table for out-of-range); directories keep ns for reconciliation |
 | Bench gate | CI gates on instruction counts (valgrind), not wall clock |
-| Qt GUI | needs Qt ≥ 6.6 + KF6 (no Ubuntu 24.04-based builds) |
+| Qt GUI | needs Qt ≥ 6.8 + KF6 Kirigami + Breeze icons (no Ubuntu 24.04-based builds); design in `docs/UI.md` |

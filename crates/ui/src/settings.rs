@@ -36,6 +36,23 @@ pub enum Frontend {
     Gtk,
 }
 
+/// A saved search (Everything’s bookmarks): text, filter, match options and sort order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Bookmark {
+    pub name: String,
+    pub search: String,
+    /// Name of the filter.
+    pub filter: String,
+    pub match_case: bool,
+    pub whole_word: bool,
+    pub match_path: bool,
+    pub regex: bool,
+    pub match_diacritics: bool,
+    pub sort: SortField,
+    pub sort_descending: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -54,6 +71,9 @@ pub struct Settings {
     pub custom_filters: Vec<Filter>,
     /// Show hidden files (names starting with `.`, and their contents).
     pub show_hidden: bool,
+    pub bookmarks: Vec<Bookmark>,
+    /// Keep recent searches (see `history`).
+    pub remember_history: bool,
     pub theme: Theme,
     pub frontend: Frontend,
     /// Show a tray icon.
@@ -90,6 +110,8 @@ impl Default for Settings {
             filter: "Everything".into(),
             custom_filters: Vec::new(),
             show_hidden: true,
+            bookmarks: Vec::new(),
+            remember_history: true,
             theme: Theme::System,
             frontend: Frontend::Auto,
             tray: false,
@@ -178,6 +200,14 @@ impl Settings {
             f.query = f.query.trim().to_owned();
             let keep = !f.name.is_empty() && !names.contains(&f.name);
             names.push(f.name.clone());
+            keep
+        });
+        // So do bookmarks.
+        let mut names = Vec::new();
+        self.bookmarks.retain_mut(|b| {
+            b.name = b.name.trim().to_owned();
+            let keep = !b.name.is_empty() && !names.contains(&b.name);
+            names.push(b.name.clone());
             keep
         });
         self.shortcut = self.shortcut.trim().to_owned();
@@ -280,6 +310,24 @@ mod tests {
             }]
         );
         assert_eq!(s.filter_query(), "ext:rs");
+        // Bookmarks too; missing keys take defaults.
+        std::fs::write(
+            &path,
+            "[[bookmarks]]\nname = \" Big \"\nsearch = \"size:>1gb\"\nsort = \"Size\"\n\
+             [[bookmarks]]\nname = \"Big\"\n[[bookmarks]]\nname = \"\"\n",
+        )
+        .unwrap();
+        let s = Settings::load_from(&path);
+        assert_eq!(
+            s.bookmarks,
+            vec![Bookmark {
+                name: "Big".into(),
+                search: "size:>1gb".into(),
+                sort: SortField::Size,
+                ..Bookmark::default()
+            }]
+        );
+        assert!(s.remember_history);
         // Garbage gives the defaults.
         std::fs::write(&path, "columns = 7").unwrap();
         assert_eq!(Settings::load_from(&path), Settings::default());

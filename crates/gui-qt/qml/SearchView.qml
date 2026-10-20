@@ -44,8 +44,29 @@ FocusScope {
         searchField.forceActiveFocus()
         searchField.selectAll()
     }
+    function openMenu() {
+        applicationWindow().openMainMenu(menuButton)
+    }
+    function setSearch(text) {
+        searchField.text = text
+        focusSearch()
+    }
+    function remember() {
+        App.rememberSearch(searchField.text)
+    }
+    function applySort(field, descending) {
+        results.sortBy(Columns.indexOfSort(field), descending)
+    }
+    function openHistory() {
+        historyMenu.popup(searchField, 0, searchField.height)
+    }
     function storeColumns() {
         table.storeColumns()
+    }
+
+    RecentSearchesMenu {
+        id: historyMenu
+        onChosen: search => view.setSearch(search)
     }
 
     SearchModel {
@@ -72,12 +93,21 @@ FocusScope {
                     focus: true
                     autoAccept: true
                     delaySearch: false
+                    // The window’s own Ctrl+F (also F3, Ctrl+L) focuses the field and selects its text.
                     focusSequence: ""
+                    focusSequences: []
                     placeholderText: qsTr("Search")
                     Accessible.name: qsTr("Search file and folder names")
                     onTextChanged: view.run()
-                    Keys.onDownPressed: table.focusTable()
-                    Keys.onReturnPressed: table.focusTable()
+                    // Alt+Down lists recent searches, as in a combo box.
+                    Keys.onDownPressed: event => {
+                        if (event.modifiers & Qt.AltModifier) view.openHistory()
+                        else table.focusTable()
+                    }
+                    Keys.onReturnPressed: {
+                        view.remember()
+                        table.focusTable()
+                    }
                 }
                 QQC2.ComboBox {
                     id: filterBox
@@ -131,6 +161,7 @@ FocusScope {
             settings: view.settings
             saveSettings: view.saveSettings
             onSearchFocusRequested: view.focusSearch()
+            onResultUsed: view.remember()
         }
 
         StatusBar {

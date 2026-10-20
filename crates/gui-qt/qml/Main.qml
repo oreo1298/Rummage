@@ -36,6 +36,32 @@ Kirigami.ApplicationWindow {
     function openMainMenu(item) {
         mainMenu.popup(item, 0, item.height)
     }
+    // Saves the current tab's search, filter, match options and sort as a bookmark (replacing
+    // one of the same name).
+    function addBookmark(name) {
+        name = name.trim()
+        if (name === "" || !current) return
+        const s = JSON.parse(App.settingsJson)
+        const b = {
+            name: name, search: current.text, filter: s.filter,
+            match_case: s.match_case, whole_word: s.whole_word, match_path: s.match_path,
+            regex: s.regex, match_diacritics: s.match_diacritics,
+            sort: Columns.sortFields[current.model.sortColumn] || "Name",
+            sort_descending: current.model.sortDescending
+        }
+        s.bookmarks = s.bookmarks.filter(x => x.name !== name).concat([b])
+        App.saveSettings(JSON.stringify(s))
+    }
+    function applyBookmark(b) {
+        const s = JSON.parse(App.settingsJson)
+        for (const k of ["match_case", "whole_word", "match_path", "regex", "match_diacritics",
+                         "filter", "sort", "sort_descending"])
+            s[k] = b[k]
+        App.saveSettings(JSON.stringify(s))
+        if (!current) return
+        current.applySort(b.sort, b.sort_descending)
+        current.setSearch(b.search)
+    }
 
     title: current && current.text.length > 0 ? qsTr("%1 – Fossick").arg(current.text) : "Fossick"
     width: settings.window_width
@@ -134,6 +160,14 @@ Kirigami.ApplicationWindow {
             onTriggered: root.toggle("show_hidden")
         }
         QQC2.MenuSeparator {}
+        RecentSearchesMenu {
+            onChosen: search => { if (root.current) root.current.setSearch(search) }
+        }
+        BookmarksMenu {
+            onAddRequested: bookmarkDialog.ask()
+            onChosen: bookmark => root.applyBookmark(bookmark)
+        }
+        QQC2.MenuSeparator {}
         QQC2.MenuItem { text: qsTr("New Tab"); icon.name: "tab-new"; onTriggered: root.newTab() }
         QQC2.MenuItem { text: qsTr("New Window"); icon.name: "window-new"; onTriggered: root.newWindow() }
         QQC2.MenuSeparator {}
@@ -154,6 +188,28 @@ Kirigami.ApplicationWindow {
     Shortcut { sequences: [StandardKey.Close]; onActivated: root.closeTab(tabBar.currentIndex) }
     Shortcut { sequences: [StandardKey.New]; onActivated: root.newWindow() }
     Shortcut { sequences: [StandardKey.Quit]; onActivated: Qt.quit() }
+    Shortcut { sequence: "F10"; onActivated: if (root.current) root.current.openMenu() }
+    Shortcut { sequence: "Ctrl+D"; onActivated: bookmarkDialog.ask() }
+
+    Kirigami.PromptDialog {
+        id: bookmarkDialog
+        function ask() {
+            bookmarkName.text = root.current ? root.current.text : ""
+            open()
+            bookmarkName.forceActiveFocus()
+            bookmarkName.selectAll()
+        }
+        title: qsTr("Add Bookmark")
+        subtitle: qsTr("Saves the search with its filter, match options and sort order.")
+        standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
+        QQC2.TextField {
+            id: bookmarkName
+            placeholderText: qsTr("Name")
+            Accessible.name: qsTr("Bookmark name")
+            onAccepted: bookmarkDialog.accept()
+        }
+        onAccepted: root.addBookmark(bookmarkName.text)
+    }
     Shortcut { sequences: [StandardKey.Preferences, "Ctrl+,"]; onActivated: Windows.showSettings() }
     Shortcut { sequence: "Ctrl+Tab"; onActivated: tabBar.currentIndex = (tabBar.currentIndex + 1) % tabModel.count }
     Shortcut {

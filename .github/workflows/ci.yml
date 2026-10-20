@@ -68,12 +68,17 @@ jobs:
           key: gui-qt
       - run: cargo clippy -p fossick-qt --all-targets -- -D warnings
       - run: cargo build -p fossick-qt -p fossickd -p fossick
-      - name: Offscreen screenshots
+      - name: Offscreen screenshots (KDE style)
         env:
           QT_QPA_PLATFORM: offscreen
           QT_QUICK_BACKEND: software
           XDG_CURRENT_DESKTOP: KDE
-        run: tests/gui/screenshot.sh shots target/debug
+        run: tests/gui/screenshot.sh shots/kde target/debug
+      - name: Offscreen screenshots (Fusion style)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: tests/gui/screenshot.sh shots/fusion target/debug
       - uses: actions/upload-artifact@v4
         with:
           name: gui-qt-screenshots
