@@ -48,7 +48,7 @@ fn benches(c: &mut Criterion) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("bench.fsidx");
     group.bench_function("write", |b| {
-        b.iter(|| persist::write(&g, &path).expect("write"))
+        b.iter(|| persist::write(&g, &path).expect("write"));
     });
     group.bench_function("load_warm_essential", |b| {
         b.iter(|| {
@@ -65,7 +65,7 @@ fn benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("build");
     group.sample_size(10);
     group.bench_function("index_100k", |b| {
-        b.iter(|| black_box(build_index(&TreeSpec::new(100_000)).0.len()))
+        b.iter(|| black_box(build_index(&TreeSpec::new(100_000)).0.len()));
     });
     group.finish();
 }
