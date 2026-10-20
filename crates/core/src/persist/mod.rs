@@ -684,7 +684,12 @@ fn from_mapping(map: Arc<Mapping>, verify: Verify) -> Result<Snapshot, PersistEr
         restricted: mapped_column(&map, &secs, Kind::DirRestricted, dp)?,
     };
     let owners_flat: Vec<u32> = secs.vec(Kind::Owners, 0)?;
-    let owners: Vec<(u32, u32)> = owners_flat.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+    let owners: Vec<(u32, u32)> = owners_flat
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[u, g]| (u, g))
+        .collect();
     let big: Vec<DiskBigSize> = secs.vec(Kind::BigSize, 0)?;
     let odd: Vec<DiskOddTime> = secs.vec(Kind::OddTime, 0)?;
     let oo: Vec<DiskOwner> = secs.vec(Kind::OddOwner, 0)?;
