@@ -607,7 +607,12 @@ mod tests {
 
     #[test]
     fn arena_regexes() {
-        let has_arena = |p: &str| TextMatch::regex(p, false, true).unwrap().arena_regex().is_some();
+        let has_arena = |p: &str| {
+            TextMatch::regex(p, false, true)
+                .unwrap()
+                .arena_regex()
+                .is_some()
+        };
         assert!(has_arena("^data_[0-9]+$"));
         assert!(has_arena(r"\bfoo\b"));
         assert!(!has_arena(r"\Adata"));
