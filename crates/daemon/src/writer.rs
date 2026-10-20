@@ -928,16 +928,29 @@ impl Writer {
                     Resolved::Gone
                 }
             }
-            // inotify: a watched directory whose listing was never applied, or that was
-            // removed from the index, is gone (or replaced, which its parent’s events cover).
+            // inotify: a watch whose directory isn’t (or no longer is) the indexed entry it was
+            // recorded for. It may have been deleted (then its events are moot) or replaced
+            // while its events were queued; either way a pruned rescan settles it if retrying
+            // doesn’t, so the events wait instead of being dropped.
             DirRef::Inode(dev, ino) => match self.dir_inodes.get(&(vid, *dev, *ino)) {
                 Some(&id) if is_dir(&self.w, id, *ino) => Resolved::Dir(id),
                 other => {
-                    log::debug(&format!(
-                        "event for unindexed directory {dev}:{ino} (mapped: {})",
-                        other.is_some()
-                    ));
-                    Resolved::Gone
+                    if log::debugging() {
+                        let detail = other.map_or_else(
+                            || "not mapped".to_owned(),
+                            |&id| {
+                                format!(
+                                    "mapped to {} (live {}, {:?}, inode {:?})",
+                                    String::from_utf8_lossy(&self.w.path(id)),
+                                    self.w.is_live(id),
+                                    self.w.kind(id),
+                                    self.w.meta(id).map(|m| m.inode)
+                                )
+                            },
+                        );
+                        log::debug(&format!("event for unindexed directory {dev}:{ino}: {detail}"));
+                    }
+                    Resolved::Pending
                 }
             },
             DirRef::Handle(h) => {
